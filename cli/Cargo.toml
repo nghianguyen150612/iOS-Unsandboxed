@@ -1,0 +1,11 @@
+[package]
+name = "ios-unsandboxed"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "SSH-oriented management CLI for iOS-Unsandboxed"
+license = "MIT"
+
+[[bin]]
+name = "ios-unsandboxed"
+path = "src/main.rs"
