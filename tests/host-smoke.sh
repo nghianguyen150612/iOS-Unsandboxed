@@ -22,7 +22,6 @@ check_cli_unimplemented() {
     printf '%s\n' "$output" | grep -F 'is not implemented' >/dev/null
 }
 
-check_cli_unimplemented doctor
 check_cli_unimplemented status
 check_cli_unimplemented inspect ./binary
 check_cli_unimplemented sign ./binary
@@ -31,6 +30,20 @@ check_cli_unimplemented install ./binary
 check_cli_unimplemented enable
 check_cli_unimplemented disable
 check_cli_unimplemented logs
+
+if output=$("$cli" doctor 2>&1); then
+    echo 'CLI doctor unexpectedly reported operational compatibility' >&2
+    exit 1
+else
+    status=$?
+fi
+[ "$status" -eq 4 ] || {
+    echo "CLI doctor returned $status, expected fail-closed status 4" >&2
+    exit 1
+}
+printf '%s\n' "$output" | grep -F 'Detected platform: linux' >/dev/null
+printf '%s\n' "$output" | grep -F 'Amethyst compatibility verification: UNSUPPORTED_PLATFORM' >/dev/null
+printf '%s\n' "$output" | grep -F 'Device acceptance: NOT TESTED' >/dev/null
 
 "$daemon" --help >/dev/null
 [ "$("$daemon" --version)" = 'ios-unsandboxedd 0.1.0' ]
@@ -59,4 +72,18 @@ fi
 }
 printf '%s\n' "$output" | grep -F 'operation '\''start'\'' is not implemented' >/dev/null
 
-echo 'Host CLI and daemon smoke checks passed.'
+if output=$("$daemon" --probe 2>&1); then
+    echo 'Daemon probe unexpectedly reported operational compatibility' >&2
+    exit 1
+else
+    status=$?
+fi
+[ "$status" -eq 4 ] || {
+    echo "Daemon probe returned $status, expected fail-closed status 4" >&2
+    exit 1
+}
+printf '%s\n' "$output" | grep -F 'Detected platform: Linux' >/dev/null
+printf '%s\n' "$output" | grep -F 'UNSUPPORTED_PLATFORM' >/dev/null
+printf '%s\n' "$output" | grep -F 'Device acceptance: NOT TESTED' >/dev/null
+
+echo 'Host CLI and daemon read-only/fail-safe smoke checks passed.'

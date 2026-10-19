@@ -3,14 +3,18 @@ CC ?= cc
 IOS_TARGET := aarch64-apple-ios
 IOS_DEPLOYMENT_TARGET := 12.0
 HOST_DAEMON := build/host/ios-unsandboxedd
+HOST_NATIVE_TEST := build/host/native-preflight-test
 IOS_DAEMON := build/ios/ios-unsandboxedd
+NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c
+NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test smoke-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test smoke-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
 	  'make build       Build the host CLI and diagnostic daemon' \
-	  'make test        Run Rust tests and host smoke checks' \
+	  'make test        Run Rust tests, C17 tests, and host smoke checks' \
+	  'make native-test Run isolated C17 preflight and policy tests' \
 	  'make smoke-test  Check host CLI and daemon help/version/fail-safe modes' \
 	  'make build-ios   Cross-compile CLI and daemon for ARM64 iOS 12.0+' \
 	  'make clean       Remove generated build artifacts'
@@ -18,13 +22,21 @@ help:
 build: host-build
 
 host-build:
-	cargo build --workspace
+	cargo build --locked --workspace
 	mkdir -p build/host
-	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 daemon/src/main.c -o $(HOST_DAEMON)
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  daemon/src/main.c $(NATIVE_SOURCES) -o $(HOST_DAEMON)
 
 test: host-build
-	cargo test --workspace
+	cargo test --locked --workspace
+	$(MAKE) native-test
 	$(MAKE) smoke-test
+
+native-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  tests/native-preflight-test.c $(NATIVE_SOURCES) -o $(HOST_NATIVE_TEST)
+	./$(HOST_NATIVE_TEST)
 
 smoke-test: host-build
 	./tests/host-smoke.sh
@@ -40,11 +52,11 @@ check-ios-toolchain:
 
 build-ios: check-ios-toolchain
 	mkdir -p build/ios
-	SDKROOT="$$(xcrun --sdk iphoneos --show-sdk-path)" IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) cargo build --release --target $(IOS_TARGET) --workspace
-	xcrun --sdk iphoneos clang -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 \
+	SDKROOT="$$(xcrun --sdk iphoneos --show-sdk-path)" IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) cargo build --locked --release --target $(IOS_TARGET) --workspace
+	xcrun --sdk iphoneos clang -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
 	  -target arm64-apple-ios$(IOS_DEPLOYMENT_TARGET) \
 	  -isysroot "$$(xcrun --sdk iphoneos --show-sdk-path)" \
-	  -o $(IOS_DAEMON) daemon/src/main.c
+	  -o $(IOS_DAEMON) daemon/src/main.c $(NATIVE_SOURCES)
 
 clean:
 	cargo clean

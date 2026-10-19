@@ -18,13 +18,9 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Run Rust static analysis
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run Rust tests
-        run: cargo test --workspace
-      - name: Build host CLI and C17 daemon
-        run: make host-build
-      - name: Run host help, version, and safe-failure checks
-        run: make smoke-test
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run Rust, C17, and host smoke tests
+        run: make test
 
   ios-cross-compile:
     name: Apple ARM64 iOS cross-compilation

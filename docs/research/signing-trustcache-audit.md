@@ -52,7 +52,7 @@ These entries are kernel-resident during the current kernel lifetime, not a pers
 - Trust-cache lock wrappers use a static pthread mutex around selected read/add helpers. The raw helpers remain callable internally without that lock. There is no corresponding signing mutex or per-file lock around F_ADDSIGS. The XPC bootstrap-pipe cache also has no explicit project-level lock in the inspected client.
 - Kernel read/write helpers are void and stop on an underlying Mach error without propagating a result. Some higher-level operations perform readback checks, but the server can still report success after helper paths that do not verify each mutation.
 
-These behaviors do not satisfy iOS-Unsandboxed's non-negotiable “no silent signing failures” requirement. P003 must add a fail-closed adapter result that reports the failed stage and must not launch a target after failed preparation. Concurrent launches of the same path need an inode-pinned transaction or serialization policy before any file or vnode state is changed.
+These behaviors do not satisfy iOS-Unsandboxed's non-negotiable “no silent signing failures” requirement. P003 adds only a compatibility result and a pure eligibility policy; it does not call these operations. Any future launch/signing adapter must add a fail-closed result that reports the failed stage and must not launch a target after failed preparation. Concurrent launches of the same path need an inode-pinned transaction or serialization policy before any file or vnode state is changed.
 
 ## Source-backed conclusion
 
