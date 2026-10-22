@@ -1,12 +1,13 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fs;
 use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const USAGE: &str = "Usage: ios-unsandboxed <command> [arguments]\n\
 \n\
 Commands:\n\
-  doctor                         Check the environment (not implemented)\n\
+  doctor                         Run read-only compatibility diagnostics\n\
   status                         Show service status (not implemented)\n\
   inspect <binary>               Inspect a Mach-O binary (not implemented)\n\
   sign <binary> [--entitlements <file>]\n\
@@ -24,6 +25,7 @@ Options:\n\
 enum Invocation {
     Help,
     Version,
+    Doctor,
     ReservedCommand(&'static str),
 }
 
@@ -48,7 +50,7 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
         .ok_or(UsageError("command name must be valid UTF-8"))?;
 
     match command {
-        "doctor" if args.len() == 1 => Ok(Invocation::ReservedCommand("doctor")),
+        "doctor" if args.len() == 1 => Ok(Invocation::Doctor),
         "status" if args.len() == 1 => Ok(Invocation::ReservedCommand("status")),
         "enable" if args.len() == 1 => Ok(Invocation::ReservedCommand("enable")),
         "disable" if args.len() == 1 => Ok(Invocation::ReservedCommand("disable")),
@@ -87,6 +89,7 @@ fn main() -> ExitCode {
             println!("ios-unsandboxed {VERSION}");
             ExitCode::SUCCESS
         }
+        Ok(Invocation::Doctor) => print_doctor(),
         Ok(Invocation::ReservedCommand(command)) => {
             eprintln!(
                 "ios-unsandboxed: '{command}' is not implemented in v{VERSION}; no system state was changed."
@@ -101,9 +104,141 @@ fn main() -> ExitCode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ComponentState {
+    Missing,
+    Regular,
+    WrongType,
+    MetadataUnavailable,
+}
+
+const OS: &str = env::consts::OS;
+const ARCH: &str = env::consts::ARCH;
+
+fn inspect_component(path: &str) -> ComponentState {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ComponentState::Missing;
+        }
+        Err(_) => return ComponentState::MetadataUnavailable,
+    };
+
+    if !metadata.file_type().is_file() {
+        return ComponentState::WrongType;
+    }
+    ComponentState::Regular
+}
+
+fn compatibility_state(components_ok: bool) -> &'static str {
+    if OS != "ios" || ARCH != "aarch64" {
+        "UNSUPPORTED_PLATFORM"
+    } else if !components_ok {
+        "COMPONENT_MISSING"
+    } else {
+        // std cannot establish the hardware model, exact iOS build, installed
+        // Amethyst provenance, or live hook state.
+        "UNVERIFIED"
+    }
+}
+
+fn print_doctor() -> ExitCode {
+    let components = [
+        (
+            "/amethyst/launchd_hook.dylib",
+            inspect_component("/amethyst/launchd_hook.dylib"),
+        ),
+        (
+            "/usr/lib/base_hook.dylib",
+            inspect_component("/usr/lib/base_hook.dylib"),
+        ),
+    ];
+    let components_ok = components
+        .iter()
+        .all(|(_, state)| *state == ComponentState::Regular);
+    let compatibility = compatibility_state(components_ok);
+
+    println!("iOS-Unsandboxed read-only preflight");
+    println!("Project version: {VERSION}");
+    println!("Detected platform: {OS}");
+    println!("Architecture: {ARCH}");
+    println!("Machine: UNKNOWN (requires native device probe)");
+    println!("Product version: UNKNOWN (requires native device probe)");
+    println!("System build: UNKNOWN (requires native device probe)");
+
+    let layout_paths = [
+        "/usr/local/bin",
+        "/usr/local/lib",
+        "/var/lib",
+        "/var/run",
+        "/var/log",
+        "/Library/LaunchDaemons",
+    ];
+    if OS == "ios" {
+        let available = layout_paths
+            .iter()
+            .filter(|path| fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()))
+            .count();
+        println!("Rootful layout assessment: WARN — {available}/{} contract directories available; rootful status is not proven", layout_paths.len());
+    } else {
+        println!("Rootful layout assessment: UNKNOWN — diagnostics are running outside iOS");
+    }
+
+    println!("Amethyst component detection:");
+    for (path, state) in components {
+        let status = match state {
+            ComponentState::Missing => "FAIL: missing",
+            ComponentState::Regular => "WARN: regular file; read access not checked by Rust probe",
+            ComponentState::WrongType => "FAIL: unexpected file type",
+            ComponentState::MetadataUnavailable => "UNKNOWN: metadata access unavailable",
+        };
+        println!("  {path}: {status}");
+    }
+    println!("Amethyst compatibility verification: {compatibility}");
+    if compatibility == "UNVERIFIED" {
+        println!("  WARN: exact device/version, installed Amethyst build, and live hook state are unknown");
+    }
+
+    let project_paths = [
+        "/usr/local/bin/ios-unsandboxed",
+        "/usr/local/bin/ios-unsandboxedd",
+        "/usr/local/bin/iu",
+        "/var/lib/ios-unsandboxed",
+        "/var/lib/ios-unsandboxed/manager.sh",
+        "/var/lib/ios-unsandboxed/install-state",
+        "/usr/local/lib/ios-unsandboxed",
+        "/Library/LaunchDaemons/com.ios-unsandboxed.daemon.plist",
+        "/var/run/ios-unsandboxedd.sock",
+        "/var/log/ios-unsandboxed",
+    ];
+    let project_paths_present = project_paths
+        .iter()
+        .filter(|path| fs::symlink_metadata(path).is_ok())
+        .count();
+    println!(
+        "Project rootful paths: {project_paths_present}/{} present (metadata only)",
+        project_paths.len()
+    );
+
+    println!("Current preflight capability: PASS — read-only diagnostics only");
+    println!("Activation eligibility: FAIL — preflight is not verified and activation is not implemented");
+    println!(
+        "Remaining requirements: exact installed Amethyst provenance, authenticated daemon policy,"
+    );
+    println!("  live hook checks, and file identity preservation through the final launch gate.");
+    println!("Device acceptance: NOT TESTED");
+    println!("Diagnostic collection: PASS");
+
+    if compatibility == "SUPPORTED_AND_VERIFIED" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(4)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, Invocation, UsageError};
+    use super::{compatibility_state, parse_args, Invocation, UsageError};
     use std::ffi::OsString;
 
     fn args(parts: &[&str]) -> Vec<OsString> {
@@ -121,7 +256,7 @@ mod tests {
 
     #[test]
     fn reserved_commands_accept_the_documented_shapes() {
-        for command in ["doctor", "status", "enable", "disable", "logs"] {
+        for command in ["status", "enable", "disable", "logs"] {
             assert_eq!(
                 parse_args(&args(&[command])),
                 Ok(Invocation::ReservedCommand(command))
@@ -151,7 +286,17 @@ mod tests {
     }
 
     #[test]
+    fn doctor_is_diagnostic_and_never_claims_unverified_compatibility() {
+        assert_eq!(parse_args(&args(&["doctor"])), Ok(Invocation::Doctor));
+        assert_ne!(compatibility_state(true), "SUPPORTED_AND_VERIFIED");
+    }
+
+    #[test]
     fn malformed_or_unknown_commands_are_rejected() {
+        assert_eq!(
+            parse_args(&args(&["doctor", "--activate"])),
+            Err(UsageError("invalid command arguments"))
+        );
         assert_eq!(
             parse_args(&args(&["enable", "now"])),
             Err(UsageError("invalid command arguments"))

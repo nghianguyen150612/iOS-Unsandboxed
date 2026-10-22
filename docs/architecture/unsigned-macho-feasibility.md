@@ -4,7 +4,7 @@
 
 P002 does not establish that an ARM64 Mach-O without LC_CODE_SIGNATURE can launch on the reference iPad. Amethyst's ordinary pre-launch path does nothing for a missing or unusable signature structure. Its lower-level builder can create a CodeDirectory for a slice without an old signature, and sign_binary submits the generated blob through F_ADDSIGS without a userspace on-disk rewrite. No current normal caller reaches that case, and iOS 12.5.7 kernel acceptance and dynamic-loader startup have not been tested.
 
-**Verdict: EXPERIMENTAL BLOCKER.** Do not claim that trust-cache insertion, signing, sandbox exemption, or successful runtime startup is solved. A bounded P003 device experiment may test the in-memory F_ADDSIGS path after the integration and security prerequisites below are met. This document does not authorize an Amethyst patch or a device modification.
+**Verdict: EXPERIMENTAL BLOCKER.** Do not claim that trust-cache insertion, signing, sandbox exemption, or successful runtime startup is solved. A future, separately authorized device experiment may test the in-memory F_ADDSIGS path after the integration and security prerequisites below are met. This document does not authorize an Amethyst patch or a device modification.
 
 ## Four distinct input states
 
@@ -71,7 +71,7 @@ Preparation must happen before the original executable launch because launchd/ba
 
 ### 3. Extend the existing base-hook launch path to request vnode-attached F_ADDSIGS state
 
-**Classification: PLAUSIBLE / UNVERIFIED; the recommended bounded P003 experiment, not a release architecture.**
+**Classification: PLAUSIBLE / UNVERIFIED; a possible future bounded experiment, not a release architecture.**
 
 - **Prerequisites:** modify or compatibly extend Amethyst's base_hook execve_hook/spawn_handler so it checks an explicit product opt-in and performs preparation synchronously before the original launch. Add a version handshake and precise error propagation. The request must identify the canonical path plus a revalidated file identity. Extend the private Amethyst adapter/server path so it explicitly calls the already-present CodeDirectory builder for no-LC slices and F_ADDSIGS operation.
 - **Advantages:** preserves the original file and direct ./binary workflow if the kernel honors the vnode-attached blob. The source builder already handles a missing old signature; sign_binary already submits an in-memory blob through F_ADDSIGS.
@@ -95,13 +95,13 @@ The P001 contract reserves /usr/local/bin/ios-unsandboxed, /usr/local/bin/iu (fi
 
 Amethyst's launchd_hook intercepts reads of launchd configuration: it adds plist files found in /Library/LaunchDaemons to the LaunchDaemons dictionary and adds /Library/LaunchDaemons to the path array. This is the source-confirmed Amethyst registration path that could expose a project-owned LaunchDaemon plist. It does not load a dylib merely because it exists under /usr/local/lib. See [jbserver.c LaunchDaemons/Paths hook](https://github.com/staturnzz/amethyst/blob/61ce86d7d3f00e5395f4d42bebda0e5dce04946a/basebins/launchd_hook/src/jbserver.c#L392-L429).
 
-The project daemon would need root:wheel ownership, restricted socket permissions, and a default-disabled policy. The actual launchd hook is Amethyst-owned and must already be active when launchd enumerates the project plist; source gives no ordering guarantee between Amethyst initialization and the project daemon. P003 must make the daemon wait for an authenticated compatibility handshake and must refuse launch work while the hook/server is unavailable. The feature's enabled state may persist in the project install-state file across reboot, but the live Amethyst/kernel capability must be revalidated after every jailbreak start. Disable must atomically stop new work and record disabled state. On Amethyst component restart, lost IPC or a failed heartbeat must make the hook fail closed and report unavailable; it must not silently continue targeted binaries. On system reboot, trust-cache/vnode state is volatile and Amethyst must be active again before the feature can operate.
+The project daemon would need root:wheel ownership, restricted socket permissions, and a default-disabled policy. The actual launchd hook is Amethyst-owned and must already be active when launchd enumerates the project plist; source gives no ordering guarantee between Amethyst initialization and the project daemon. Future service work must make the daemon wait for an authenticated compatibility handshake and refuse launch work while the hook/server is unavailable. The feature's enabled state may persist in the project install-state file across reboot, but the live Amethyst/kernel capability must be revalidated after every jailbreak start. Disable must atomically stop new work and record disabled state. On Amethyst component restart, lost IPC or a failed heartbeat must make the hook fail closed and report unavailable; it must not silently continue targeted binaries. On system reboot, trust-cache/vnode state is volatile and Amethyst must be active again before the feature can operate.
 
 The SSH server is expected to remain a normal Amethyst-injected process. No product launchd job should replace, wrap, or modify SSH. If a hook/daemon failure could disrupt SSH, the project integration must be independently disableable and must leave unrelated SSH launches on the original path. The base-hook modification itself is Amethyst-owned and requires separate review.
 
 ## Security and reliability requirements
 
-None of these controls is implemented by P002. They are non-negotiable P003 requirements.
+None of these execution controls is implemented by P002 or P003. P003 adds only read-only preflight diagnostics and a testable eligibility policy; these controls remain prerequisites for future execution work.
 
 | Failure mode | Required control |
 | --- | --- |
@@ -133,14 +133,14 @@ All remain **NOT RUN** because the reference device was not available:
 - Device restart and jailbreak restart.
 - SSH stability.
 
-## P003 prerequisites
+## P004 and later prerequisites
 
 1. Obtain and record the exact Amethyst build and source revision installed on the reference iPad; verify it corresponds to the audited ABI or perform a new audit.
-2. Review and approve the necessary Amethyst-owned base_hook change separately. It must add an explicit policy gate and invoke a product-owned C17 adapter before execve/spawn for eligible targets.
+2. Review and approve any necessary Amethyst-owned base_hook change separately. It must add an explicit policy gate and invoke a product-owned C17 adapter before execve/spawn for eligible targets.
 3. Define a versioned adapter and authenticated daemon IPC, with error-stage propagation, a server/version handshake, and no public exposure of the private Amethyst request protocol.
 4. Implement the no-LC F_ADDSIGS experimental path only behind a disabled-by-default feature flag. Verify file identity and propagate failures; never fall through silently after an opted-in preparation error.
 5. Set a narrow eligible path/ownership/mode policy; reject Apple system and Amethyst-owned executables, malformed or unsupported Mach-O, setuid/setgid files, unsafe symlinks, and path races.
 6. Specify enable/disable persistence, launchd job ordering, Amethyst restart behavior, reboot recovery, logs, and rollback before implementation.
 7. Run host and iOS cross-compilation gates, then each physical-device gate above on the exact reference configuration. Source inspection and CI cannot substitute for device evidence.
 
-P002 stops here. No Amethyst component was modified, no device operation was performed, and P003 was not started.
+P002 was research-only. P003 subsequently added read-only compatibility diagnostics and an in-memory C17 eligibility policy. No Amethyst component was modified, no device operation was performed, and no P004 work has started.
