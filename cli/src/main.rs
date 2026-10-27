@@ -3,12 +3,14 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::process::ExitCode;
 
+mod ipc;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const USAGE: &str = "Usage: ios-unsandboxed <command> [arguments]\n\
 \n\
 Commands:\n\
   doctor                         Run read-only compatibility diagnostics\n\
-  status                         Show service status (not implemented)\n\
+  status                         Show daemon and activation status\n\
   inspect <binary>               Inspect a Mach-O binary (not implemented)\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
@@ -19,13 +21,15 @@ Commands:\n\
 \n\
 Options:\n\
   -h, --help                     Show this help\n\
-  -V, --version                  Show version\n";
+  -V, --version                  Show version\n\
+      --test-socket <path> status  Query an explicitly selected development socket\n";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Invocation {
     Help,
     Version,
     Doctor,
+    Status(Option<OsString>),
     ReservedCommand(&'static str),
 }
 
@@ -51,7 +55,12 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
 
     match command {
         "doctor" if args.len() == 1 => Ok(Invocation::Doctor),
-        "status" if args.len() == 1 => Ok(Invocation::ReservedCommand("status")),
+        "status" if args.len() == 1 => Ok(Invocation::Status(None)),
+        "--test-socket"
+            if args.len() == 3 && !args[1].is_empty() && args[2] == OsStr::new("status") =>
+        {
+            Ok(Invocation::Status(Some(args[1].clone())))
+        }
         "enable" if args.len() == 1 => Ok(Invocation::ReservedCommand("enable")),
         "disable" if args.len() == 1 => Ok(Invocation::ReservedCommand("disable")),
         "logs" if args.len() == 1 => Ok(Invocation::ReservedCommand("logs")),
@@ -90,6 +99,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Invocation::Doctor) => print_doctor(),
+        Ok(Invocation::Status(test_socket)) => print_status(test_socket.as_deref()),
         Ok(Invocation::ReservedCommand(command)) => {
             eprintln!(
                 "ios-unsandboxed: '{command}' is not implemented in v{VERSION}; no system state was changed."
@@ -100,6 +110,67 @@ fn main() -> ExitCode {
             eprintln!("ios-unsandboxed: {}", error.0);
             eprintln!("Try 'ios-unsandboxed --help' for usage.");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn print_status(test_socket: Option<&OsStr>) -> ExitCode {
+    println!("iOS-Unsandboxed v{VERSION}");
+    let result = match test_socket {
+        Some(path) => ipc::get_status_test_socket(std::path::Path::new(path)),
+        None => ipc::get_status(),
+    };
+    match result {
+        Ok(status) => {
+            println!(
+                "\nDaemon: {}",
+                if status.daemon_running {
+                    "RUNNING"
+                } else {
+                    "UNAVAILABLE"
+                }
+            );
+            println!(
+                "IPC: CONNECTED\nIPC protocol: v1\nActivation: {}",
+                if status.activation {
+                    "ENABLED"
+                } else {
+                    "DISABLED"
+                }
+            );
+            println!(
+                "Amethyst compatibility: {}",
+                match status.compatibility {
+                    0 => "SUPPORTED AND VERIFIED",
+                    1 => "UNVERIFIED",
+                    2 => "COMPONENT MISSING",
+                    3 => "VERSION MISMATCH",
+                    4 => "UNSUPPORTED PLATFORM",
+                    _ => "INTERNAL ERROR",
+                }
+            );
+            println!(
+                "Execution interception: {}",
+                if status.interception {
+                    "IMPLEMENTED"
+                } else {
+                    "NOT IMPLEMENTED"
+                }
+            );
+            println!(
+                "Device acceptance: {}",
+                if status.device_verified {
+                    "VERIFIED"
+                } else {
+                    "NOT TESTED"
+                }
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            println!("\nDaemon: UNAVAILABLE\nIPC: CONNECTION FAILED\nActivation: UNKNOWN");
+            eprintln!("\nError: cannot connect to ios-unsandboxedd ({error}).");
+            ExitCode::from(4)
         }
     }
 }
@@ -199,6 +270,20 @@ fn print_doctor() -> ExitCode {
         println!("  WARN: exact device/version, installed Amethyst build, and live hook state are unknown");
     }
 
+    println!("Daemon IPC connectivity:");
+    match ipc::ping() {
+        Ok(()) => {
+            println!("  connection: PASS — compatible daemon responded to PING");
+            match ipc::get_preflight() {
+                Ok(result) => println!("  daemon preflight: compatibility={} family={} architecture={} device_match={} os_match={}", result.compatibility, result.family, result.architecture, result.device_match, result.os_match),
+                Err(error) => println!("  daemon preflight: unavailable ({error})"),
+            }
+        }
+        Err(_) => println!(
+            "  connection: UNAVAILABLE — local diagnostics remain independent of daemon IPC"
+        ),
+    }
+
     let project_paths = [
         "/usr/local/bin/ios-unsandboxed",
         "/usr/local/bin/ios-unsandboxedd",
@@ -256,7 +341,12 @@ mod tests {
 
     #[test]
     fn reserved_commands_accept_the_documented_shapes() {
-        for command in ["status", "enable", "disable", "logs"] {
+        assert_eq!(parse_args(&args(&["status"])), Ok(Invocation::Status(None)));
+        assert_eq!(
+            parse_args(&args(&["--test-socket", "/tmp/iu.sock", "status"])),
+            Ok(Invocation::Status(Some(OsString::from("/tmp/iu.sock"))))
+        );
+        for command in ["enable", "disable", "logs"] {
             assert_eq!(
                 parse_args(&args(&[command])),
                 Ok(Invocation::ReservedCommand(command))
