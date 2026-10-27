@@ -23,7 +23,7 @@ Existing jailbreak launch/signing/trust mechanisms
 
 The Rust CLI owns user-facing command parsing, diagnostics, configuration, and error reporting. `iu doctor` performs read-only diagnostics directly and does not call a companion through `PATH`. The C17 daemon is the future long-running service boundary for native Darwin integration. `ios-unsandboxedd --probe` calls the P003 C17 preflight module. The reusable native policy evaluator is separate from Amethyst and currently has no execution caller.
 
-P003 implements a versioned C17 compatibility result and a deterministic fail-closed eligibility policy. P004 adds only read-only IPC status and preflight operations. There is still no native Amethyst backend, launch hook, signing implementation, or trust-cache integration. The daemon runs in the foreground only after an explicit start request. Compatibility remains unverified unless exact installed Amethyst provenance and device evidence can be established; current probes do not establish that proof.
+P003 implements a versioned C17 compatibility result and a deterministic fail-closed eligibility policy. P004 adds authenticated IPC; P005 adds a read-only persistent-state loader, an additive lifecycle diagnostic, and a passive LaunchDaemon template. There is still no native Amethyst backend, launch hook, state writer, signing implementation, or trust-cache integration. The daemon runs in the foreground only after an explicit start request; P005 does not install or activate the plist. Execution activation remains disabled. Compatibility remains unverified unless exact installed Amethyst provenance and device evidence can be established; current probes do not establish that proof.
 
 ## Launch integration constraints
 

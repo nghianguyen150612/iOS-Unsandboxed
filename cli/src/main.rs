@@ -10,7 +10,7 @@ const USAGE: &str = "Usage: ios-unsandboxed <command> [arguments]\n\
 \n\
 Commands:\n\
   doctor                         Run read-only compatibility diagnostics\n\
-  status                         Show daemon and activation status\n\
+  status                         Show daemon lifecycle and activation status\n\
   inspect <binary>               Inspect a Mach-O binary (not implemented)\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
@@ -22,7 +22,8 @@ Commands:\n\
 Options:\n\
   -h, --help                     Show this help\n\
   -V, --version                  Show version\n\
-      --test-socket <path> status  Query an explicitly selected development socket\n";
+      --test-socket <path> status  Query an explicitly selected development socket\n\
+      --test-socket <path> check   Exercise read-only IPC diagnostics\n";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Invocation {
@@ -30,6 +31,7 @@ enum Invocation {
     Version,
     Doctor,
     Status(Option<OsString>),
+    TestCheck(OsString),
     ReservedCommand(&'static str),
 }
 
@@ -60,6 +62,11 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
             if args.len() == 3 && !args[1].is_empty() && args[2] == OsStr::new("status") =>
         {
             Ok(Invocation::Status(Some(args[1].clone())))
+        }
+        "--test-socket"
+            if args.len() == 3 && !args[1].is_empty() && args[2] == OsStr::new("check") =>
+        {
+            Ok(Invocation::TestCheck(args[1].clone()))
         }
         "enable" if args.len() == 1 => Ok(Invocation::ReservedCommand("enable")),
         "disable" if args.len() == 1 => Ok(Invocation::ReservedCommand("disable")),
@@ -100,6 +107,7 @@ fn main() -> ExitCode {
         }
         Ok(Invocation::Doctor) => print_doctor(),
         Ok(Invocation::Status(test_socket)) => print_status(test_socket.as_deref()),
+        Ok(Invocation::TestCheck(path)) => print_test_check(std::path::Path::new(&path)),
         Ok(Invocation::ReservedCommand(command)) => {
             eprintln!(
                 "ios-unsandboxed: '{command}' is not implemented in v{VERSION}; no system state was changed."
@@ -110,6 +118,56 @@ fn main() -> ExitCode {
             eprintln!("ios-unsandboxed: {}", error.0);
             eprintln!("Try 'ios-unsandboxed --help' for usage.");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn print_test_check(path: &std::path::Path) -> ExitCode {
+    match ipc::test_socket_check(path) {
+        Ok(check) => {
+            println!("PING: PASS");
+            println!(
+                "GET_STATUS: PASS (activation={}, interception={}, device_acceptance={})",
+                if check.status.activation {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                if check.status.interception {
+                    "implemented"
+                } else {
+                    "not_implemented"
+                },
+                if check.status.device_verified {
+                    "verified"
+                } else {
+                    "not_tested"
+                }
+            );
+            println!(
+                "GET_PREFLIGHT: PASS (compatibility={} family={} architecture={})",
+                check.preflight.compatibility, check.preflight.family, check.preflight.architecture
+            );
+            if let Some(lifecycle) = check.status.lifecycle {
+                println!(
+                    "GET_LIFECYCLE_STATUS: PASS (state={}; schema={}; peer_uid={}; peer_gid={})",
+                    state_file_status_name(lifecycle.state_file),
+                    if lifecycle.schema_supported {
+                        lifecycle.schema_version.to_string()
+                    } else {
+                        "unsupported_or_unknown".to_owned()
+                    },
+                    lifecycle.peer_uid,
+                    lifecycle.peer_gid
+                );
+            } else {
+                println!("GET_LIFECYCLE_STATUS: NOT IMPLEMENTED (P004 daemon)");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("ios-unsandboxed: test socket diagnostic failed ({error})");
+            ExitCode::from(4)
         }
     }
 }
@@ -130,14 +188,67 @@ fn print_status(test_socket: Option<&OsStr>) -> ExitCode {
                     "UNAVAILABLE"
                 }
             );
-            println!(
-                "IPC: CONNECTED\nIPC protocol: v1\nActivation: {}",
-                if status.activation {
-                    "ENABLED"
-                } else {
-                    "DISABLED"
-                }
-            );
+            println!("IPC: CONNECTED\nIPC protocol: v1");
+            println!("LaunchDaemon job state: UNKNOWN (launchd state is not queried)");
+            if test_socket.is_some() {
+                println!("Daemon executable: NOT CHECKED (test socket)");
+                println!("LaunchDaemon plist: NOT CHECKED (test socket)");
+            } else {
+                println!(
+                    "Daemon executable: {}",
+                    local_file_presence("/usr/local/bin/ios-unsandboxedd")
+                );
+                println!(
+                    "LaunchDaemon plist: {}",
+                    local_file_presence("/Library/LaunchDaemons/com.ios-unsandboxed.daemon.plist")
+                );
+            }
+            if let Some(lifecycle) = status.lifecycle {
+                println!(
+                    "Authenticated peer: uid={} gid={}",
+                    lifecycle.peer_uid, lifecycle.peer_gid
+                );
+                println!(
+                    "Installation record: {}",
+                    if lifecycle.service_installed {
+                        "INSTALLED (root-owned state record)"
+                    } else {
+                        "NOT RECORDED"
+                    }
+                );
+                println!(
+                    "State file: {}",
+                    state_file_status_name(lifecycle.state_file)
+                );
+                println!(
+                    "State schema: {}{}",
+                    if lifecycle.schema_supported {
+                        "SUPPORTED"
+                    } else if lifecycle.state_file == ipc::StateFileStatus::UnsupportedSchema {
+                        "UNSUPPORTED"
+                    } else {
+                        "UNKNOWN"
+                    },
+                    if lifecycle.schema_version != 0 {
+                        format!(" (version {})", lifecycle.schema_version)
+                    } else {
+                        String::new()
+                    }
+                );
+                println!("Activation: DISABLED (P005 has no activation operation)");
+            } else {
+                println!("Installation record: UNKNOWN (not reported by this daemon)");
+                println!("State file: UNKNOWN (not reported by this daemon)");
+                println!("State schema: UNKNOWN (not reported by this daemon)");
+                println!(
+                    "Activation: {} (reported by daemon)",
+                    if status.activation {
+                        "ENABLED"
+                    } else {
+                        "DISABLED"
+                    }
+                );
+            }
             println!(
                 "Amethyst compatibility: {}",
                 match status.compatibility {
@@ -168,10 +279,49 @@ fn print_status(test_socket: Option<&OsStr>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            println!("\nDaemon: UNAVAILABLE\nIPC: CONNECTION FAILED\nActivation: UNKNOWN");
+            println!("\nDaemon: UNAVAILABLE\nIPC: CONNECTION FAILED");
+            println!("LaunchDaemon job state: UNKNOWN (launchd state is not queried)");
+            if test_socket.is_some() {
+                println!("Daemon executable: NOT CHECKED (test socket)");
+                println!("LaunchDaemon plist: NOT CHECKED (test socket)");
+            } else {
+                println!(
+                    "Daemon executable: {}",
+                    local_file_presence("/usr/local/bin/ios-unsandboxedd")
+                );
+                println!(
+                    "LaunchDaemon plist: {}",
+                    local_file_presence("/Library/LaunchDaemons/com.ios-unsandboxed.daemon.plist")
+                );
+            }
+            println!("Installation record: UNKNOWN (IPC unavailable)");
+            println!("State file: UNKNOWN (IPC unavailable)");
+            println!("State schema: UNKNOWN (IPC unavailable)");
+            println!("Activation: UNKNOWN (IPC unavailable)");
             eprintln!("\nError: cannot connect to ios-unsandboxedd ({error}).");
             ExitCode::from(4)
         }
+    }
+}
+
+fn local_file_presence(path: &str) -> &'static str {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => "PRESENT",
+        Ok(_) => "UNSAFE FILE TYPE",
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "ABSENT",
+        Err(_) => "UNKNOWN",
+    }
+}
+
+fn state_file_status_name(status: ipc::StateFileStatus) -> &'static str {
+    match status {
+        ipc::StateFileStatus::DirectoryMissing => "DIRECTORY MISSING",
+        ipc::StateFileStatus::FileMissing => "FILE MISSING",
+        ipc::StateFileStatus::Valid => "AVAILABLE AND VALID",
+        ipc::StateFileStatus::Unsafe => "UNSAFE (not trusted)",
+        ipc::StateFileStatus::UnsupportedSchema => "AVAILABLE WITH UNSUPPORTED SCHEMA",
+        ipc::StateFileStatus::Corrupt => "CORRUPT (not trusted)",
+        ipc::StateFileStatus::IoError => "UNAVAILABLE (I/O error)",
     }
 }
 
@@ -345,6 +495,10 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["--test-socket", "/tmp/iu.sock", "status"])),
             Ok(Invocation::Status(Some(OsString::from("/tmp/iu.sock"))))
+        );
+        assert_eq!(
+            parse_args(&args(&["--test-socket", "/tmp/iu.sock", "check"])),
+            Ok(Invocation::TestCheck(OsString::from("/tmp/iu.sock")))
         );
         for command in ["enable", "disable", "logs"] {
             assert_eq!(

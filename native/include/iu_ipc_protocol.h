@@ -17,6 +17,7 @@ enum iu_ipc_type {
     IU_IPC_PING = 1,
     IU_IPC_GET_STATUS = 2,
     IU_IPC_GET_PREFLIGHT = 3,
+    IU_IPC_GET_LIFECYCLE_STATUS = 4,
     IU_IPC_ENABLE = 0x100,
     IU_IPC_DISABLE = 0x101,
     IU_IPC_SET_POLICY = 0x102,

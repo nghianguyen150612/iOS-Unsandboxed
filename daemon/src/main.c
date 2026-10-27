@@ -3,6 +3,7 @@
 
 #include "iu_ipc_server.h"
 #include "iu_preflight.h"
+#include "iu_service_state.h"
 
 #define IOS_UNSANDBOXED_VERSION "0.1.0"
 
@@ -21,7 +22,7 @@ static const char *const amethyst_component_paths[IU_PREFLIGHT_COMPONENT_COUNT] 
 
 static void print_help(void)
 {
-    puts("Usage: ios-unsandboxedd [--help | --version | --probe | --serve | --test-socket <path>]");
+    puts("Usage: ios-unsandboxedd [--help | --version | --probe | --serve | --test-socket <path> [--test-state <path>]]");
     puts("");
     puts("Diagnostic options:");
     puts("  -h, --help       Show this help");
@@ -29,6 +30,7 @@ static void print_help(void)
     puts("      --probe      Run read-only compatibility diagnostics");
     puts("      --serve      Start production IPC server at /var/run/ios-unsandboxedd.sock (root only)");
     puts("      --test-socket <path>  Start isolated non-production test server");
+    puts("      --test-state <path>   Read an isolated install-state fixture (test server only)");
     puts("");
     puts("IPC serves only read-only status and preflight requests; privileged operations remain unavailable.");
 }
@@ -148,11 +150,17 @@ int main(int argc, char **argv)
     }
 
     if (argc == 2 && strcmp(argv[1], "--serve") == 0) {
-        return iu_ipc_serve("/var/run/ios-unsandboxedd.sock", 0) == 0 ? EXIT_OK : EXIT_INTERNAL;
+        return iu_ipc_serve("/var/run/ios-unsandboxedd.sock", 0,
+                            "/var/lib/ios-unsandboxed/install-state") == 0 ? EXIT_OK : EXIT_INTERNAL;
     }
 
     if (argc == 3 && strcmp(argv[1], "--test-socket") == 0) {
-        return iu_ipc_serve(argv[2], 1) == 0 ? EXIT_OK : EXIT_INTERNAL;
+        return iu_ipc_serve(argv[2], 1, NULL) == 0 ? EXIT_OK : EXIT_INTERNAL;
+    }
+
+    if (argc == 5 && strcmp(argv[1], "--test-socket") == 0 &&
+        strcmp(argv[3], "--test-state") == 0) {
+        return iu_ipc_serve(argv[2], 1, argv[4]) == 0 ? EXIT_OK : EXIT_INTERNAL;
     }
 
     if (argc == 1) {
