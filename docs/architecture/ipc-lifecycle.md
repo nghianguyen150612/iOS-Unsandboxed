@@ -1,6 +1,6 @@
 # IPC socket lifecycle
 
-`ios-unsandboxedd --serve` explicitly starts the foreground production server at `/var/run/ios-unsandboxedd.sock`; it does not daemonize, install a LaunchDaemon, or start at boot. The caller must run it with effective UID 0. A later packaging/lifecycle task owns service management.
+`ios-unsandboxedd --serve` explicitly starts the foreground production server at `/var/run/ios-unsandboxedd.sock`; it does not daemonize, install a LaunchDaemon, or start at boot. The caller must run it with effective UID 0. P005 includes a passive plist template, but no P005 command installs, loads, bootstraps, kickstarts, or activates it.
 
 For development, `ios-unsandboxedd --test-socket <path>` explicitly selects test mode. It requires a socket path in an existing directory owned by the invoking UID and rejects the production socket pathname. It does not enable privileged operations. Host tests use private temporary directories and do not need root.
 
@@ -8,6 +8,8 @@ The daemon refuses an existing symlink or non-socket. For an existing socket, it
 
 There is an unavoidable pathname race between a final `lstat` and `unlink` on portable POSIX APIs. Production reduces exposure by requiring a root-owned directory with no group/world write access and holding the instance lock. Test paths are intended to be inside a private directory owned by the test process. The daemon never recursively changes parent ownership or modes and never follows a final-component symlink.
 
-The listener polls at short intervals so termination is responsive. It has backlog four, one active client, a 512-byte payload bound, and two-second frame transfer deadlines. Malformed or abandoned clients are closed; later clients continue to be served. If the runtime directory is absent or fails validation, startup fails without creating a path elsewhere.
+The listener polls at short intervals so termination is responsive. It has backlog four, one active client, a 512-byte payload bound, and two-second frame transfer deadlines. SIGTERM/SIGINT handlers are installed before listener setup. Malformed or abandoned clients are closed; later clients continue to be served. Fatal poll/accept errors return failure after owned-socket cleanup. If the runtime directory is absent or fails validation, startup fails without creating a path elsewhere.
+
+P005 reads the project state file for the new lifecycle request. Missing or corrupt state does not block the diagnostic listener, and no state writer or state-dependent activation exists. `GET_STATUS` retains the P004 8-byte response; P005 lifecycle details use additive request ID 4.
 
 On iOS, `/var/run` layout, Darwin peer credentials, socket permissions, root/non-root SSH behavior, and Apple A7 client/server behavior remain physical-device gates. The macOS cross-build only verifies compilation against the iOS SDK.

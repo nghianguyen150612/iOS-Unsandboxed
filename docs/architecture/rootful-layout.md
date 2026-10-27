@@ -7,13 +7,13 @@ The canonical paths are maintained in [`packaging/rootful/paths.env`](../../pack
 | CLI | `/usr/local/bin/ios-unsandboxed` | `root:wheel`, executable |
 | CLI alias | `/usr/local/bin/iu` | `root:wheel` symlink to `/usr/local/bin/ios-unsandboxed` |
 | Daemon | `/usr/local/bin/ios-unsandboxedd` | `root:wheel`, executable |
-| Installer manager | `/var/lib/ios-unsandboxed/manager.sh` | `root:wheel`, restricted to administrators |
-| Installation state | `/var/lib/ios-unsandboxed/install-state` | `root:wheel`, restricted to administrators |
-| Configuration and project data | `/var/lib/ios-unsandboxed/` | `root:wheel`; future subpaths must define access explicitly |
+| Installer manager | `/var/lib/ios-unsandboxed/manager.sh` | `root:wheel`, mode `0700`, restricted to administrators; future installer only |
+| Installation state | `/var/lib/ios-unsandboxed/install-state` | `root:wheel`, file mode `0600`; schema 1 is always execution-disabled |
+| Configuration and project data | `/var/lib/ios-unsandboxed/` | `root:wheel`, directory mode `0700`; future subpaths must define access explicitly |
 | Native hooks, if needed | `/usr/local/lib/ios-unsandboxed/` | `root:wheel`; absent in P001 |
 | LaunchDaemon definition | `/Library/LaunchDaemons/com.ios-unsandboxed.daemon.plist` | `root:wheel`; inactive and absent in P001 |
-| Runtime IPC socket | `/var/run/ios-unsandboxedd.sock` | Owned by the service; access policy remains to be designed with IPC |
-| Logs | `/var/log/ios-unsandboxed/` | `root:wheel`; access policy to be defined with logging |
+| Runtime IPC socket | `/var/run/ios-unsandboxedd.sock` | `root:wheel`, mode `0600`; root-only by pathname |
+| Logs | `/var/log/ios-unsandboxed/` | `root:wheel`, directory mode `0700`; files created by launchd under this directory |
 
 ## Installation rules
 

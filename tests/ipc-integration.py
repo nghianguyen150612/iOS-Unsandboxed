@@ -46,8 +46,11 @@ def check(condition, message):
         raise AssertionError(message)
 
 
-def start(binary, path):
-    proc = subprocess.Popen([binary, "--test-socket", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+def start(binary, path, state_path=None):
+    command = [binary, "--test-socket", str(path)]
+    if state_path is not None:
+        command.extend(["--test-state", str(state_path)])
+    proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if proc.poll() is not None:
@@ -85,6 +88,8 @@ def main():
         proc = start(binary, path)
         check(path.is_socket(), "test socket was not created")
         check(path.stat().st_mode & 0o777 == 0o600, "socket mode is not 0600")
+        check(path.stat().st_uid == os.geteuid() and path.stat().st_gid == os.getegid(),
+              "test socket ownership does not match daemon identity")
 
         # PING and correlation id.
         m, v, ty, rid, code, body = exchange(path, frame(1))
@@ -99,8 +104,30 @@ def main():
         check(cli_status.returncode == 0, f"Rust CLI status request failed: {cli_status.stderr}")
         check("Daemon: RUNNING" in cli_status.stdout and "Activation: DISABLED" in cli_status.stdout,
               "Rust CLI did not report daemon response fields")
+        check("State file: DIRECTORY MISSING" in cli_status.stdout,
+              "missing state directory was not reported independently")
+        check("State schema: UNKNOWN" in cli_status.stdout,
+              "missing state schema was over-reported")
         check("Amethyst compatibility: UNSUPPORTED PLATFORM" in cli_status.stdout,
               "Rust CLI did not report preflight state")
+        cli_check = subprocess.run([cli, "--test-socket", str(path), "check"],
+                                   timeout=4, capture_output=True, text=True)
+        check(cli_check.returncode == 0, f"Rust CLI IPC qualification failed: {cli_check.stderr}")
+        for request_name in ("PING: PASS", "GET_STATUS: PASS", "GET_PREFLIGHT: PASS",
+                             f"peer_uid={os.geteuid()}; peer_gid={os.getegid()}"):
+            check(request_name in cli_check.stdout,
+                  f"Rust CLI did not report {request_name}")
+
+        # P005 adds a new request and leaves the P004 GET_STATUS payload intact.
+        _, _, ty, _, code, body = exchange(path, frame(4))
+        check(ty == (4 | RESP) and code == 0 and len(body) == 22,
+              "GET_LIFECYCLE_STATUS response invalid")
+        check(body[:6] == b"\x01\x00\x00\x00\x00\x00",
+              "missing state was treated as installed or enabled")
+        check(struct.unpack("!I", body[6:10])[0] == 0,
+              "missing state reported a schema version")
+        check(struct.unpack("!II", body[14:22]) == (os.geteuid(), os.getegid()),
+              "daemon did not report kernel-authenticated peer credentials")
 
         # GET_PREFLIGHT is explicitly serialized and reports host unsupported.
         _, _, ty, _, code, body = exchange(path, frame(3))
@@ -179,6 +206,38 @@ def main():
         check(exchange(stale, frame(1))[4] == 0, "stale project socket was not recovered")
         stop(stale_proc)
         check(not stale.exists(), "stale/recovered socket was not cleaned up")
+
+        # A valid root-owned-model fixture is read-only and remains disabled.
+        state_directory = root / "state"
+        state_directory.mkdir(mode=0o700)
+        state_file = state_directory / "install-state"
+        state_bytes = (b"ios-unsandboxed-state\n"
+                       b"schema_version=1\n"
+                       b"service_installation=installed\n"
+                       b"execution_activation=disabled\n")
+        state_file.write_bytes(state_bytes)
+        state_file.chmod(0o600)
+        valid_socket = root / "valid-state.sock"
+        valid_proc = start(binary, valid_socket, state_file)
+        _, _, ty, _, code, body = exchange(valid_socket, frame(4))
+        check(ty == (4 | RESP) and code == 0, "valid lifecycle status request failed")
+        check(body[1:6] == b"\x02\x01\x00\x01\x00",
+              "valid disabled state or install record was misreported")
+        cli_valid = subprocess.run([cli, "--test-socket", str(valid_socket), "status"],
+                                   timeout=4, capture_output=True, text=True)
+        check(cli_valid.returncode == 0, f"valid state CLI status failed: {cli_valid.stderr}")
+        check("Installation record: INSTALLED" in cli_valid.stdout and
+              "State schema: SUPPORTED (version 1)" in cli_valid.stdout and
+              "Activation: DISABLED" in cli_valid.stdout,
+              "CLI lifecycle diagnostics did not distinguish state from activation")
+        check(state_file.read_bytes() == state_bytes, "daemon modified persistent state")
+        stop(valid_proc)
+        check(not valid_socket.exists(), "normal SIGTERM shutdown left the socket behind")
+
+        restarted = start(binary, valid_socket, state_file)
+        check(exchange(valid_socket, frame(1))[4] == 0,
+              "daemon did not restart after a clean shutdown")
+        stop(restarted)
     print("IPC integration tests passed (Linux peer credential path; same-UID host coverage).")
 
 
