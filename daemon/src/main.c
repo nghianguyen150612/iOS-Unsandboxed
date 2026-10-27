@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "iu_ipc_server.h"
 #include "iu_preflight.h"
 
 #define IOS_UNSANDBOXED_VERSION "0.1.0"
@@ -20,14 +21,16 @@ static const char *const amethyst_component_paths[IU_PREFLIGHT_COMPONENT_COUNT] 
 
 static void print_help(void)
 {
-    puts("Usage: ios-unsandboxedd [--help | --version | --probe]");
+    puts("Usage: ios-unsandboxedd [--help | --version | --probe | --serve | --test-socket <path>]");
     puts("");
     puts("Diagnostic options:");
     puts("  -h, --help       Show this help");
     puts("  -V, --version    Show version");
     puts("      --probe      Run read-only compatibility diagnostics");
+    puts("      --serve      Start production IPC server at /var/run/ios-unsandboxedd.sock (root only)");
+    puts("      --test-socket <path>  Start isolated non-production test server");
     puts("");
-    puts("The daemon service mode is not implemented in v0.1.0.");
+    puts("IPC serves only read-only status and preflight requests; privileged operations remain unavailable.");
 }
 
 static void print_version(void)
@@ -142,6 +145,14 @@ int main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--probe") == 0) {
         return print_probe();
+    }
+
+    if (argc == 2 && strcmp(argv[1], "--serve") == 0) {
+        return iu_ipc_serve("/var/run/ios-unsandboxedd.sock", 0) == 0 ? EXIT_OK : EXIT_INTERNAL;
+    }
+
+    if (argc == 3 && strcmp(argv[1], "--test-socket") == 0) {
+        return iu_ipc_serve(argv[2], 1) == 0 ? EXIT_OK : EXIT_INTERNAL;
     }
 
     if (argc == 1) {

@@ -22,7 +22,6 @@ check_cli_unimplemented() {
     printf '%s\n' "$output" | grep -F 'is not implemented' >/dev/null
 }
 
-check_cli_unimplemented status
 check_cli_unimplemented inspect ./binary
 check_cli_unimplemented sign ./binary
 check_cli_unimplemented sign ./binary --entitlements ./entitlements.plist
@@ -30,6 +29,15 @@ check_cli_unimplemented install ./binary
 check_cli_unimplemented enable
 check_cli_unimplemented disable
 check_cli_unimplemented logs
+
+if output=$("$cli" status 2>&1); then
+    echo 'CLI status unexpectedly connected to absent daemon' >&2
+    exit 1
+else
+    status=$?
+fi
+[ "$status" -eq 4 ]
+printf '%s\n' "$output" | grep -F 'Activation: UNKNOWN' >/dev/null
 
 if output=$("$cli" doctor 2>&1); then
     echo 'CLI doctor unexpectedly reported operational compatibility' >&2

@@ -4,17 +4,19 @@ IOS_TARGET := aarch64-apple-ios
 IOS_DEPLOYMENT_TARGET := 12.0
 HOST_DAEMON := build/host/ios-unsandboxedd
 HOST_NATIVE_TEST := build/host/native-preflight-test
+HOST_PEER_AUTH_TEST := build/host/peer-auth-test
 IOS_DAEMON := build/ios/ios-unsandboxedd
 NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test smoke-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test ipc-test smoke-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
 	  'make build       Build the host CLI and diagnostic daemon' \
-	  'make test        Run Rust tests, C17 tests, and host smoke checks' \
-	  'make native-test Run isolated C17 preflight and policy tests' \
+	  'make test        Run Rust, native, IPC, and host smoke checks' \
+	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
+	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
 	  'make smoke-test  Check host CLI and daemon help/version/fail-safe modes' \
 	  'make build-ios   Cross-compile CLI and daemon for ARM64 iOS 12.0+' \
 	  'make clean       Remove generated build artifacts'
@@ -24,12 +26,13 @@ build: host-build
 host-build:
 	cargo build --locked --workspace
 	mkdir -p build/host
-	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
-	  daemon/src/main.c $(NATIVE_SOURCES) -o $(HOST_DAEMON)
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) -Idaemon/include \
+	  daemon/src/main.c daemon/src/ipc_server.c daemon/src/peer_auth.c $(NATIVE_SOURCES) -o $(HOST_DAEMON)
 
 test: host-build
 	cargo test --locked --workspace
 	$(MAKE) native-test
+	$(MAKE) ipc-test
 	$(MAKE) smoke-test
 
 native-test:
@@ -37,6 +40,12 @@ native-test:
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
 	  tests/native-preflight-test.c $(NATIVE_SOURCES) -o $(HOST_NATIVE_TEST)
 	./$(HOST_NATIVE_TEST)
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  tests/peer-auth-test.c daemon/src/peer_auth.c -Idaemon/include -o $(HOST_PEER_AUTH_TEST)
+	./$(HOST_PEER_AUTH_TEST)
+
+ipc-test: host-build
+	python3 tests/ipc-integration.py
 
 smoke-test: host-build
 	./tests/host-smoke.sh
@@ -56,7 +65,7 @@ build-ios: check-ios-toolchain
 	xcrun --sdk iphoneos clang -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
 	  -target arm64-apple-ios$(IOS_DEPLOYMENT_TARGET) \
 	  -isysroot "$$(xcrun --sdk iphoneos --show-sdk-path)" \
-	  -o $(IOS_DAEMON) daemon/src/main.c $(NATIVE_SOURCES)
+	  -Idaemon/include -o $(IOS_DAEMON) daemon/src/main.c daemon/src/ipc_server.c daemon/src/peer_auth.c $(NATIVE_SOURCES)
 
 clean:
 	cargo clean
