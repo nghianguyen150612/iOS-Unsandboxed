@@ -10,7 +10,7 @@ IOS_DAEMON := build/ios/ios-unsandboxedd
 NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test state-test ipc-test packaging-test smoke-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test state-test ipc-test packaging-test device-harness-test smoke-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -20,6 +20,7 @@ help:
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
 	  'make packaging-test Parse and check the passive LaunchDaemon plist' \
+	  'make device-harness-test Run host fixtures for the safe device harness' \
 	  'make smoke-test  Check host CLI and daemon help/version/fail-safe modes' \
 	  'make build-ios   Cross-compile CLI and daemon for ARM64 iOS 12.0+' \
 	  'make clean       Remove generated build artifacts'
@@ -37,6 +38,7 @@ test: host-build
 	$(MAKE) native-test
 	$(MAKE) ipc-test
 	$(MAKE) packaging-test
+	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
 native-test:
@@ -60,6 +62,9 @@ ipc-test: host-build
 
 packaging-test:
 	python3 tests/packaging-plist-test.py
+
+device-harness-test:
+	python3 tests/device/host-fixture-test.py
 
 smoke-test: host-build
 	./tests/host-smoke.sh
