@@ -6,11 +6,13 @@ HOST_DAEMON := build/host/ios-unsandboxedd
 HOST_NATIVE_TEST := build/host/native-preflight-test
 HOST_PEER_AUTH_TEST := build/host/peer-auth-test
 HOST_STATE_TEST := build/host/service-state-test
+HOST_INSTALLER_HELPER := build/host/installer-helper
 IOS_DAEMON := build/ios/ios-unsandboxedd
+IOS_INSTALLER_HELPER := build/ios/installer-helper
 NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test state-test ipc-test packaging-test device-harness-test smoke-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test package-rootful device-harness-test smoke-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -20,9 +22,11 @@ help:
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
 	  'make packaging-test Parse and check the passive LaunchDaemon plist' \
+	  'make installer-test Run isolated rootful installer transaction fixtures' \
+	  'make package-rootful Build the deterministic Apple ARM64 rootful distribution (macOS)' \
 	  'make device-harness-test Run host fixtures for the safe device harness' \
 	  'make smoke-test  Check host CLI and daemon help/version/fail-safe modes' \
-	  'make build-ios   Cross-compile CLI and daemon for ARM64 iOS 12.0+' \
+	  'make build-ios   Cross-compile CLI, daemon, and installer helper for ARM64 iOS 12.0+' \
 	  'make clean       Remove generated build artifacts'
 
 build: host-build
@@ -32,12 +36,15 @@ host-build:
 	mkdir -p build/host
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) -Idaemon/include \
 	  daemon/src/main.c daemon/src/ipc_server.c daemon/src/peer_auth.c $(NATIVE_SOURCES) -o $(HOST_DAEMON)
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_INSTALLER_TESTING $(NATIVE_INCLUDES) \
+	  native/src/iu_installer.c native/src/iu_service_state.c -o $(HOST_INSTALLER_HELPER)
 
 test: host-build
 	cargo test --locked --workspace
 	$(MAKE) native-test
 	$(MAKE) ipc-test
 	$(MAKE) packaging-test
+	$(MAKE) installer-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -63,6 +70,9 @@ ipc-test: host-build
 packaging-test:
 	python3 tests/packaging-plist-test.py
 
+installer-test: host-build
+	python3 tests/packaging/installer-integration.py $(HOST_INSTALLER_HELPER)
+
 device-harness-test:
 	python3 tests/device/host-fixture-test.py
 
@@ -85,6 +95,13 @@ build-ios: check-ios-toolchain
 	  -target arm64-apple-ios$(IOS_DEPLOYMENT_TARGET) \
 	  -isysroot "$$(xcrun --sdk iphoneos --show-sdk-path)" \
 	  -Idaemon/include -o $(IOS_DAEMON) daemon/src/main.c daemon/src/ipc_server.c daemon/src/peer_auth.c $(NATIVE_SOURCES)
+	xcrun --sdk iphoneos clang -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  -target arm64-apple-ios$(IOS_DEPLOYMENT_TARGET) \
+	  -isysroot "$$(xcrun --sdk iphoneos --show-sdk-path)" \
+	  native/src/iu_installer.c native/src/iu_service_state.c -o $(IOS_INSTALLER_HELPER)
+
+package-rootful: build-ios
+	python3 scripts/build-rootful-package.sh
 
 clean:
 	cargo clean

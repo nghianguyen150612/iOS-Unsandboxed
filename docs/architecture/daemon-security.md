@@ -24,4 +24,4 @@ The server parses one length-delimited request per connection and closes after o
 
 ## Out of scope
 
-No endpoint forwards raw Amethyst operations. No arbitrary PID/path, caller-supplied authorization boolean, kernel address, descriptor integer, or private Amethyst struct is accepted. No signing, trust-cache mutation, launch interception, sandbox change, state writer, or execution activation exists. See [service lifecycle](service-lifecycle.md) and [persistent state](persistent-state.md).
+No endpoint forwards raw Amethyst operations. No arbitrary PID/path, caller-supplied authorization boolean, kernel address, descriptor integer, or private Amethyst struct is accepted. The daemon has no state writer, and IPC exposes no state mutation. The separate P007 project installer writes only the exact disabled schema-v1 record. No signing, trust-cache mutation, launch interception, sandbox change, or execution activation exists. See [service lifecycle](service-lifecycle.md) and [persistent state](persistent-state.md).
