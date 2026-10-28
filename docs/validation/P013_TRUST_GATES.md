@@ -9,7 +9,7 @@
 - Independent build-origin attestation: NOT AVAILABLE; always `ORIGIN_UNVERIFIED`.
 - Authoritative protected-origin classification: NOT AVAILABLE; always `UNKNOWN`.
 - P012 C verifier integration: NOT IMPLEMENTED; existing v1 remains fail closed.
-- P011 scope and P009 backend in CLI result: scope not checked, backend unverified.
+- P011 scope and P009 backend in CLI result: P012 scope preview is reported after identity comparison; backend unverified.
 - Operational authorization: always false; no launch API added.
 
 ## Required tests and CI

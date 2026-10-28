@@ -6,8 +6,9 @@
 use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
@@ -15,7 +16,6 @@ const MANIFEST_MAX: usize = 8192;
 const STORE_MAX: usize = 16384;
 const KEY_MAX: usize = 64;
 const SIGNING_DOMAIN: &[u8] = b"ios-unsandboxed-provenance-v1\0";
-const TRUST_DIR: &str = "/var/lib/ios-unsandboxed/trusted-publishers";
 const TRUST_FILE: &str = "store.v1";
 #[cfg(target_os = "macos")]
 const OPEN_SAFE_FLAGS: i32 = libc::O_NOFOLLOW | libc::O_CLOEXEC;
@@ -28,6 +28,8 @@ pub struct ArtifactIdentity {
     pub size: u64,
     pub architecture: u32,
     pub filetype: u32,
+    pub device: u64,
+    pub inode: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -340,7 +342,13 @@ fn safe_read(
         || before.ino() != after.ino()
         || before.size() != after.size()
         || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
         || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+        || before.mode() != after.mode()
+        || before.uid() != after.uid()
+        || before.gid() != after.gid()
+        || before.nlink() != after.nlink()
         || current.dev() != before.dev()
         || current.ino() != before.ino()
     {
@@ -349,34 +357,127 @@ fn safe_read(
     Ok(bytes)
 }
 
-fn load_production_store() -> Result<TrustStore, String> {
-    for ancestor in ["/var", "/var/lib", "/var/lib/ios-unsandboxed", TRUST_DIR] {
-        let metadata = fs::symlink_metadata(ancestor)
-            .map_err(|e| format!("cannot inspect trust-store path {ancestor}: {e}"))?;
-        if !metadata.is_dir()
-            || metadata.uid() != 0
-            || metadata.gid() != 0
-            || metadata.mode() & 0o022 != 0
+fn open_child(parent: &File, name: &std::ffi::CStr, directory: bool) -> Result<File, String> {
+    let flags = libc::O_RDONLY
+        | libc::O_NOFOLLOW
+        | libc::O_CLOEXEC
+        | libc::O_NONBLOCK
+        | if directory { libc::O_DIRECTORY } else { 0 };
+    // openat returns a new descriptor; File owns it after the success check.
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(format!(
+            "trust-store open failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn same_metadata(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    a.dev() == b.dev()
+        && a.ino() == b.ino()
+        && a.mode() == b.mode()
+        && a.uid() == b.uid()
+        && a.gid() == b.gid()
+        && a.nlink() == b.nlink()
+        && a.size() == b.size()
+        && a.mtime() == b.mtime()
+        && a.mtime_nsec() == b.mtime_nsec()
+        && a.ctime() == b.ctime()
+        && a.ctime_nsec() == b.ctime_nsec()
+}
+
+fn load_store_from_root(
+    root: File,
+    components: &[&std::ffi::CStr],
+    uid: u32,
+    gid: u32,
+) -> Result<TrustStore, String> {
+    let mut dirs = vec![root];
+    let mut snapshots = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        let parent = dirs.last().ok_or("missing root")?;
+        let meta = parent.metadata().map_err(|e| e.to_string())?;
+        if !meta.is_dir() || meta.uid() != uid || meta.gid() != gid || meta.mode() & 0o022 != 0 {
+            return Err("unsafe trust-store parent".into());
+        }
+        let child = open_child(parent, component, true)?;
+        let child_meta = child.metadata().map_err(|e| e.to_string())?;
+        if !child_meta.is_dir()
+            || child_meta.uid() != uid
+            || child_meta.gid() != gid
+            || child_meta.mode() & 0o022 != 0
+            || (index + 1 == components.len() && child_meta.mode() & 0o7777 != 0o700)
         {
-            return Err(format!("trust-store path component is unsafe: {ancestor}"));
+            return Err("unsafe trust-store directory".into());
+        }
+        snapshots.push(child_meta);
+        dirs.push(child);
+    }
+    let dir = dirs.last().ok_or("missing trust directory")?;
+    let name = std::ffi::CString::new(TRUST_FILE).map_err(|e| e.to_string())?;
+    let mut file = open_child(dir, &name, false)?;
+    let before = file.metadata().map_err(|e| e.to_string())?;
+    if !before.is_file()
+        || before.uid() != uid
+        || before.gid() != gid
+        || before.mode() & 0o7777 != 0o600
+        || before.nlink() != 1
+        || before.size() > STORE_MAX as u64
+    {
+        return Err("unsafe trust-store file".into());
+    }
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take((STORE_MAX + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let after = file.metadata().map_err(|e| e.to_string())?;
+    let current = open_child(dir, &name, false)?
+        .metadata()
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > STORE_MAX
+        || bytes.len() as u64 != before.size()
+        || !same_metadata(&before, &after)
+        || !same_metadata(&before, &current)
+    {
+        return Err("trust-store file changed during read".into());
+    }
+    for (i, component) in components.iter().enumerate() {
+        let current = open_child(&dirs[i], component, true)?
+            .metadata()
+            .map_err(|e| e.to_string())?;
+        let held = dirs[i + 1].metadata().map_err(|e| e.to_string())?;
+        if !same_metadata(&snapshots[i], &held) || !same_metadata(&held, &current) {
+            return Err("trust-store directory changed during read".into());
         }
     }
-    let dir =
-        fs::symlink_metadata(TRUST_DIR).map_err(|e| format!("trust store unavailable: {e}"))?;
-    if !dir.is_dir()
-        || dir.uid() != 0
-        || dir.gid() != 0
-        || dir.mode() & 0o7777 != 0o700
-        || dir.nlink() < 2
-    {
-        return Err("trust-store directory ownership or mode is unsafe".into());
-    }
-    parse_store(&safe_read(
-        Path::new(TRUST_DIR).join(TRUST_FILE).as_path(),
-        STORE_MAX,
-        Some(0),
-        Some(0o600),
-    )?)
+    parse_store(&bytes)
+}
+
+fn load_production_store() -> Result<TrustStore, String> {
+    let root = OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_SAFE_FLAGS | libc::O_DIRECTORY)
+        .open("/")
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "ios")]
+    let components = [
+        "private",
+        "var",
+        "lib",
+        "ios-unsandboxed",
+        "trusted-publishers",
+    ];
+    #[cfg(not(target_os = "ios"))]
+    let components = ["var", "lib", "ios-unsandboxed", "trusted-publishers"];
+    let names: Vec<_> = components
+        .iter()
+        .map(|s| std::ffi::CString::new(*s).expect("fixed path"))
+        .collect();
+    let refs: Vec<_> = names.iter().map(|s| s.as_c_str()).collect();
+    load_store_from_root(root, &refs, 0, 0)
 }
 
 pub fn inspect_manifest(manifest_path: &Path, artifact: &ArtifactIdentity) -> Report {
@@ -392,9 +493,13 @@ pub fn verify_cli(
     artifact_path: &std::ffi::OsStr,
 ) -> Result<(String, bool), String> {
     let identity = crate::planner::artifact_identity(artifact_path)?;
+    let scope = crate::planner::scope_preview(artifact_path, &identity)?;
     let report = inspect_manifest(manifest_path, &identity);
+    if crate::planner::artifact_identity(artifact_path)? != identity {
+        return Err("artifact identity changed during provenance inspection".into());
+    }
     let output = format!(
-        "Artifact digest: {}\nManifest syntax and canonical integrity: {}\nSignature verification (Ed25519): {}\nTrust anchor: {}\nTrust-store generation: {}\nPublisher identity: {}\nClaimed build identity: {}\nVerified build-origin evidence: {}\nProtected-origin policy: {}\nOrigin policy: {}\nP011 scope: NOT_CHECKED (local evidence command)\nP009 backend: NOT_VERIFIED\nExecution authorization: FALSE\n",
+        "Artifact digest: {}\nManifest syntax and canonical integrity: {}\nSignature verification (Ed25519): {}\nTrust anchor: {}\nTrust-store generation: {}\nPublisher identity: {}\nClaimed build identity: {}\nVerified build-origin evidence: {}\nProtected-origin policy: {}\nOrigin policy: {}\nP011 scope: {}\nP009 backend: NOT_VERIFIED\nP012 launch binding: PREVIEW ONLY (signature integration unavailable)\nExecution authorization: FALSE\n",
         if report.artifact_digest { "MATCH" } else { "MISMATCH" },
         if report.document_integrity { "VALID" } else { "INVALID" },
         report.signature_validity,
@@ -405,6 +510,7 @@ pub fn verify_cli(
         report.build_origin,
         report.protected_origin,
         report.policy,
+        scope,
     );
     Ok((
         match report.error {
@@ -531,6 +637,8 @@ mod tests {
             size: 4,
             architecture: 1,
             filetype: 2,
+            device: 0,
+            inode: 0,
         };
         let hex = identity
             .sha256
@@ -716,5 +824,51 @@ mod tests {
         std::fs::remove_file(&link).unwrap();
         std::fs::remove_file(&target).unwrap();
         std::fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
+    fn trust_reader_uses_held_directories_and_rejects_unsafe_links() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("iu-p013a-{}-{suffix}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let dir = root.join("trusted");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let store = dir.join("store.v1");
+        std::fs::write(
+            &store,
+            b"ios-unsandboxed-trust-store\nschema_version=1\ngeneration=1\nkey_count=0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let meta = std::fs::metadata(&root).unwrap();
+        let name = std::ffi::CString::new("trusted").unwrap();
+        let read = |component: &std::ffi::CStr| {
+            let rootfd = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY)
+                .open(&root)
+                .unwrap();
+            load_store_from_root(rootfd, &[component], meta.uid(), meta.gid())
+        };
+        assert_eq!(read(&name).unwrap().generation, 1);
+        let alias = root.join("alias");
+        symlink(&dir, &alias).unwrap();
+        assert!(read(&std::ffi::CString::new("alias").unwrap()).is_err());
+        let hard = root.join("hard");
+        std::fs::hard_link(&store, &hard).unwrap();
+        assert!(read(&name).is_err());
+        std::fs::remove_file(hard).unwrap();
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read(&name).is_err());
+        std::fs::remove_file(alias).unwrap();
+        std::fs::remove_file(store).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

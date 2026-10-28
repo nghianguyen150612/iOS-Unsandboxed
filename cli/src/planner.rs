@@ -113,6 +113,41 @@ pub fn artifact_identity(path: &OsStr) -> Result<crate::provenance::ArtifactIden
         size: out.file_size,
         architecture: out.architecture,
         filetype: out.macho_filetype,
+        device: out.device_number,
+        inode: out.inode,
+    })
+}
+
+pub fn scope_preview(
+    path: &OsStr,
+    identity: &crate::provenance::ArtifactIdentity,
+) -> Result<&'static str, String> {
+    let path_c = CString::new(path.as_bytes()).map_err(|_| "path contains NUL".to_owned())?;
+    let mut result = std::mem::MaybeUninit::<LaunchSummaryV1>::zeroed();
+    let rc = unsafe { iu_launch_binding_path_summary_v1(path_c.as_ptr(), result.as_mut_ptr()) };
+    if rc != 0 {
+        return Err("launch binding could not inspect the artifact".into());
+    }
+    let result = unsafe { result.assume_init() };
+    if result.abi_version != 1
+        || result.struct_size as usize != std::mem::size_of::<LaunchSummaryV1>()
+        || result.device != identity.device
+        || result.inode != identity.inode
+        || result.sha256 != identity.sha256
+        || result.operational_authorization != 0
+        || result.boundary_status != 1
+    {
+        return Err("launch binding artifact identity or ABI mismatch".into());
+    }
+    Ok(match (result.scope_state, result.store_state) {
+        (2, 1) => "MATCH (preview-only; directory membership only)",
+        (1, 1) => "NOT CONFIGURED (preview-only)",
+        (_, 0) => "POLICY MISSING",
+        (_, 2) => "POLICY CORRUPT",
+        (_, 3) => "POLICY UNSAFE",
+        (_, 4) => "POLICY SCHEMA UNSUPPORTED",
+        (_, 5) => "INACCESSIBLE OR UNVERIFIED",
+        _ => "UNVERIFIED",
     })
 }
 

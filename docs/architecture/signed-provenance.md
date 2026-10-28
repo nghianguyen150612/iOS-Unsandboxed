@@ -6,7 +6,7 @@ The verifier authenticates a publisher's canonical statement. A valid publisher 
 
 The implementation uses `ed25519-dalek` 2.x, whose Ed25519 verifier is a maintained RustCrypto implementation. The accepted algorithm is exactly `ed25519`; unknown algorithms fail closed. Verification is strict and requires 64 signature bytes and 32 public-key bytes. The CLI is read-only; trust-anchor install, revoke, rotation, and root manager integration are not implemented in this increment.
 
-The P012 C ABI v1 remains unchanged and has no production crypto provider. P012 launch binding continues to classify production provenance as unverified. This CLI reports P011 scope as not checked and P009 runtime backend evidence as unverified. It does not change P012 operational authorization.
+The P012 C ABI v1 remains unchanged and has no production crypto provider. P012 launch binding continues to classify production provenance as unverified. The CLI requests a P012 scope preview and compares its device, inode and digest to the P010 snapshot, then reinspects the artifact after manifest verification. P009 runtime backend evidence remains unverified. These separate snapshots are not an atomic descriptor-bound cryptographic integration and do not change P012 operational authorization.
 
 ## Threats and limits
 

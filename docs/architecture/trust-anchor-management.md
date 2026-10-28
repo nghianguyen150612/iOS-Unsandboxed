@@ -2,6 +2,8 @@
 
 The production reader looks only at `/var/lib/ios-unsandboxed/trusted-publishers/store.v1`. The containing directory must be owned by uid/gid 0 and mode 0700. The file must be a regular, single-link, non-symlink file owned by uid/gid 0, mode 0600, and at most 16 KiB. Schema versions other than 1, malformed metadata, duplicate IDs, and more than 64 keys deny trust.
 
+The reader traverses from an open root descriptor using `openat` and `O_NOFOLLOW`, retains each directory descriptor, and checks the directory entries again after reading. On iOS it uses the fixed `/private/var` backing path for `/var`; other hosts use `/var`. File identity, ownership, mode, link count, size, and nanosecond timestamps are compared before and after reading. This is a snapshot, not a guarantee that the store cannot change after verification.
+
 The canonical ASCII/LF format is:
 
 ```text
