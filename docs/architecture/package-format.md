@@ -37,6 +37,8 @@ file=payload/bin/ios-unsandboxed|regular|0755|<64 lowercase hex digits>
 
 The per-artifact signing records distinguish the CLI, daemon, and installer helper; package-level fields summarize them. The remaining file records are fixed by the package contract and order. Duplicate, unknown, absolute, or traversal paths are rejected. The installer accepts an expanded directory only; it does not process or extract untrusted archive entries. The builder validates plist syntax and fields with `plistlib`. It inspects the architecture, deployment target, and linked dependencies with `file` and `otool`.
 
+The iOS dependency allowlist is limited to `/usr/lib/libSystem.B.dylib` and Apple's `/usr/lib/libiconv.2.dylib` from the iPhoneOS SDK. Any other linked runtime library fails package assembly.
+
 ## Signing fields
 
 The builder records each Mach-O artifact without changing it:
