@@ -1,6 +1,7 @@
 #define _DARWIN_C_SOURCE 1
 #define _GNU_SOURCE 1
 #include "iu_service_state.h"
+#include "iu_service_lifecycle.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1125,12 +1126,13 @@ static int active_plist_present(struct context *ctx)
 
 static int cmd_status(struct context *ctx)
 {
-    struct manifest m;struct transaction t;int current=check_existing_install(ctx,&m);int txn=load_transaction(ctx,&t);
+    struct manifest m;struct transaction t;int current=check_existing_install(ctx,&m);int txn=load_transaction(ctx,&t);int active;
     if(txn<0)return bad("transaction journal is corrupt or unsafe");
     if(txn==0)printf("Transaction: interrupted (%s, phase %s). Run recover --apply.\n",t.action,t.phase);
     if(current==1){printf("Installation: not installed\n");return txn==0?3:0;}
     if(current<0)return bad("installation manifest, owned files, or disabled state failed verification");
-    printf("Installation: verified\nProject version: %s\nPackage generation: %s\nSigning status: %s\nBackup generation: %s\nExecution activation: disabled (schema v1)\nLaunchDaemon: staged inactive; no launchd operation performed\n",m.project_version,m.package_generation,m.signing_status,m.backup_generation);
+    active=active_plist_present(ctx);if(active<0)return bad("active LaunchDaemon path cannot be inspected safely");
+    printf("Installation: verified\nProject version: %s\nPackage generation: %s\nSigning status: %s\nBackup generation: %s\nExecution activation: disabled (schema v1)\nStaged LaunchDaemon plist: verified inactive template\nActive LaunchDaemon plist: %s (launchd state not queried)\n",m.project_version,m.package_generation,m.signing_status,m.backup_generation,active?"present":"absent");
     return txn==0?3:0;
 }
 static int cmd_maintenance_plan(struct context *ctx,const char *command)
@@ -1154,6 +1156,7 @@ static int cmd_plan(struct context *ctx,const char *action,const char *package_p
 {
     struct package pkg;struct manifest current;int existing=check_existing_install(ctx,&current);
     if(check_no_transaction(ctx)!=0)return 3;
+    if(strcmp(action,"upgrade")==0){int active=active_plist_present(ctx);if(active<0)return bad("active LaunchDaemon path cannot be inspected safely");if(active)return bad("unregister the project service before upgrading its daemon binary");}
     if(existing<0)return bad("current installation is modified, foreign, or unsupported");
     if(verify_package_directory(ctx,package_path,&pkg)!=0)return bad("package is missing, malformed, has a bad checksum, or is not an iOS ARM64 package");
     if(strcmp(action,"install")==0){if(existing==0){close(pkg.dirfd);return bad("installation already exists; use upgrade");}if(check_destination_conflicts(ctx)!=0){close(pkg.dirfd);return 3;}
@@ -1178,7 +1181,7 @@ static int cmd_install_or_upgrade(struct context *ctx,const char *action,const c
     existing=check_existing_install(ctx,&current);
     if(existing<0)return bad("current installation is modified, foreign, or unsupported");
     if(strcmp(action,"install")==0){if(existing==0)return bad("installation already exists; use upgrade");if(check_destination_conflicts(ctx)!=0)return 3;}
-    else if(existing!=0)return bad("upgrade requires a verified schema-v1 installation");
+    else {int active=active_plist_present(ctx);if(active<0)return bad("active LaunchDaemon path cannot be inspected safely");if(active)return bad("unregister the project service before upgrading its daemon binary");if(existing!=0)return bad("upgrade requires a verified schema-v1 installation");}
     if(verify_package_directory(ctx,package_path,&pkg)!=0)return bad("package validation failed (integrity, metadata, ownership, Mach-O architecture, or plist contract)");
     if(existing==0&&version_cmp(pkg.version,current.project_version)<=0){close(pkg.dirfd);return bad("upgrade package version must be newer than installed version");}
     if(ensure_project_data(ctx)!=0){close(pkg.dirfd);return bad("could not create a private project data directory");}
@@ -1281,13 +1284,17 @@ static int cmd_uninstall(struct context *ctx)
     return 0;
 }
 
-static int parse_arguments(int argc,char **argv,const char **command,const char **package_path,const char **test_root,int *apply)
+static int parse_arguments(int argc,char **argv,const char **command,const char **service_action,const char **package_path,const char **test_root,int *apply,int *confirmed,int *acknowledge)
 {
-    *command=NULL;*package_path=NULL;*test_root=NULL;*apply=0;
+    *command=NULL;*service_action=NULL;*package_path=NULL;*test_root=NULL;*apply=0;*confirmed=0;*acknowledge=0;
     if(argc<2)return -1;
     *command=argv[1];
-    for(int i=2;i<argc;++i){
+    int first=2;
+    if(strcmp(*command,"service")==0){if(argc<3)return -1;*service_action=argv[2];first=3;}
+    for(int i=first;i<argc;++i){
         if(strcmp(argv[i],"--apply")==0){if(*apply)return -1;*apply=1;continue;}
+        if(strcmp(argv[i],"--confirm")==0){if(*confirmed)return -1;*confirmed=1;continue;}
+        if(strcmp(argv[i],"--acknowledge-run-at-load")==0){if(*acknowledge)return -1;*acknowledge=1;continue;}
         if(strcmp(argv[i],"--package")==0&&i+1<argc){if(*package_path)return -1;*package_path=argv[++i];continue;}
         if(strcmp(argv[i],"--test-root")==0&&i+1<argc){if(*test_root)return -1;*test_root=argv[++i];continue;}
 #if defined(IU_INSTALLER_TESTING)
@@ -1300,6 +1307,9 @@ static int parse_arguments(int argc,char **argv,const char **command,const char 
 static int init_context(struct context *ctx,const char *test_root,int require_root)
 {
     struct stat st;char resolved[PATH_MAX];memset(ctx,0,sizeof(*ctx));ctx->rootfd=ctx->varlibfd=ctx->bindirfd=ctx->datafd=ctx->backupsfd=ctx->stagingfd=ctx->lockfd=-1;
+#if !defined(IU_INSTALLER_TESTING)
+    if(test_root!=NULL)return bad("--test-root is available only in the host fixture helper");
+#endif
     if(test_root){
         char root_copy[PATH_MAX],*save=NULL,*part;size_t root_length=strlen(test_root);
         if(root_length>=sizeof(root_copy)||root_length==0||test_root[0]!='/'||strcmp(test_root,"/")==0||test_root[root_length-1]=='/')return bad("--test-root must be an existing absolute, private, non-symlink directory owned by this user (and cannot be /)");
@@ -1330,14 +1340,18 @@ static void print_help(void)
          "  rollback   Restore the last verified backup; changes require --apply\n"
          "  uninstall  Remove only verified project-owned files; requires --apply\n"
          "  recover    Restore the journal's verified pre-transaction generation\n\n"
-         "Fixture mode: --test-root ABSOLUTE_PRIVATE_DIRECTORY. It requires an existing isolated root and never calls launchctl.\n"
+         "  service plan|status|register|start|stop|unregister|recover\n"
+         "             Read-only by default; changes require --apply --confirm\n"
+         "             register also requires --acknowledge-run-at-load\n\n"
+         "Fixture mode: --test-root ABSOLUTE_PRIVATE_DIRECTORY. It requires an isolated root; launchd calls require a test-only mock.\n"
          "Production mutation requires root, iPad4,4, iOS 12.5.7, and verified rootful paths.\n"
-         "No command activates execution or registers the LaunchDaemon. No command supports force.");
+         "No command activates execution. Service registration is explicit and may start the daemon. No command supports force.");
 }
 int main(int argc,char **argv)
 {
-    const char *command,*package_path,*test_root;int apply,result=0,mutating=0,need_package=0,require_root=1;struct context ctx;
-    if(parse_arguments(argc,argv,&command,&package_path,&test_root,&apply)!=0){print_help();return 2;}
+    const char *command,*service_action,*package_path,*test_root;int apply,confirmed,acknowledge,result=0,mutating=0,need_package=0,require_root=1;struct context ctx;
+    if(parse_arguments(argc,argv,&command,&service_action,&package_path,&test_root,&apply,&confirmed,&acknowledge)!=0){print_help();return 2;}
+    if(strcmp(command,"service")!=0&&(confirmed||acknowledge)){fail("service confirmation flags are valid only for service commands");return 2;}
 #if defined(IU_INSTALLER_TESTING)
     if(test_interrupt_at!=NULL){
         if(test_root==NULL||!apply){fail("test interruption requires an explicit --test-root and --apply");return 2;}
@@ -1349,12 +1363,25 @@ int main(int argc,char **argv)
     if(strcmp(command,"plan")==0){if(!package_path||apply){fail("plan requires --package and is always read-only");return 2;}need_package=1;}
     else if(strcmp(command,"install")==0||strcmp(command,"upgrade")==0){if(!package_path){fail("install and upgrade require --package DIR");return 2;}need_package=1;mutating=apply;}
     else if(strcmp(command,"status")==0){if(package_path||apply)return 2;}
+    else if(strcmp(command,"service")==0){if(package_path||!service_action)return 2;
+        if(!strcmp(service_action,"plan")||!strcmp(service_action,"status")){if(apply||confirmed||acknowledge)return 2;}
+        else if(!strcmp(service_action,"register")||!strcmp(service_action,"start")||!strcmp(service_action,"stop")||!strcmp(service_action,"unregister")||!strcmp(service_action,"recover")){mutating=apply;if(acknowledge&&strcmp(service_action,"register")!=0)return 2;}
+        else return 2;}
     else if(strcmp(command,"rollback")==0||strcmp(command,"uninstall")==0||strcmp(command,"recover")==0){if(package_path){fail("this command does not accept --package");return 2;}mutating=apply;}
     else{fail("unknown command");print_help();return 2;}
     (void)need_package;
     if(init_context(&ctx,test_root,require_root)!=0)return 2;
     if(strcmp(command,"plan")==0){struct manifest m;int installed=check_existing_install(&ctx,&m);if(installed<0)result=bad("current installation is modified, foreign, or unsupported");else result=cmd_plan(&ctx,installed==0?"upgrade":"install",package_path);}
     else if(strcmp(command,"status")==0)result=cmd_status(&ctx);
+    else if(strcmp(command,"service")==0){enum iu_service_action action;struct manifest manifest;int installed=check_existing_install(&ctx,&manifest);int daemon_valid=0,template_valid=0;
+        if(strcmp(service_action,"plan")==0)action=IU_SERVICE_PLAN;else if(strcmp(service_action,"status")==0)action=IU_SERVICE_STATUS;
+        else if(strcmp(service_action,"register")==0)action=IU_SERVICE_REGISTER;else if(strcmp(service_action,"start")==0)action=IU_SERVICE_START;
+        else if(strcmp(service_action,"stop")==0)action=IU_SERVICE_STOP;else if(strcmp(service_action,"unregister")==0)action=IU_SERVICE_UNREGISTER;else action=IU_SERVICE_RECOVER;
+        if(installed==0){daemon_valid=verify_entry_at(&ctx,ctx.bindirfd,2,&manifest.files[2])==0;template_valid=verify_entry_at(&ctx,ctx.datafd,6,&manifest.files[6])==0;}
+        if(mutating&&!ctx.fixture&&(check_production_platform(&ctx)!=0||check_production_permissions(&ctx)!=0))result=3;
+        else if(mutating&&acquire_lock(&ctx)!=0)result=4;
+        else result=iu_service_lifecycle_run(ctx.root,ctx.fixture,action,apply,confirmed,acknowledge,installed==0?1:installed==1?0:-1,daemon_valid,template_valid);
+    }
     else if(strcmp(command,"install")==0||strcmp(command,"upgrade")==0){
         if(!apply){struct manifest m;int installed=check_existing_install(&ctx,&m);if(installed<0)result=bad("current installation is modified, foreign, or unsupported");
             else result=cmd_plan(&ctx,command,package_path);}

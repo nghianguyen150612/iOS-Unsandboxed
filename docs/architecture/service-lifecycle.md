@@ -1,4 +1,4 @@
-# Service lifecycle (P005/P007 boundary)
+# Service lifecycle (P005/P007/P008 boundary)
 
 P005 adds a foreground C17 service lifecycle foundation. P007 installs project files and stages the passive plist privately, but neither component loads, bootstraps, kickstarts, or activates a LaunchDaemon. The project does not implement `iu enable` or `iu disable`, launch interception, signing, trust-cache changes, sandbox changes, or executable preparation. Execution activation is fixed to **disabled** in this release.
 
@@ -35,9 +35,9 @@ Startup and failure logs contain fixed messages and OS errors only; request payl
 
 The reviewable template is [`packaging/rootful/com.ios-unsandboxed.daemon.plist`](../../packaging/rootful/com.ios-unsandboxed.daemon.plist). Its label is `com.ios-unsandboxed.daemon`, it runs `/usr/local/bin/ios-unsandboxedd --serve` as `root:wheel`, uses `RunAtLoad=true`, and sets `KeepAlive=false`. It does not use launchd socket activation. A daemon exit is not configured for an unrestricted restart loop.
 
-The plist is packaged and P007 stages an inactive copy at `/var/lib/ios-unsandboxed/com.ios-unsandboxed.daemon.plist.inactive`. It is not copied to `/Library/LaunchDaemons`; P007 does not invoke `launchctl`, bootstrap, kickstart, or enable a job. Python's host `plistlib` parses and checks its keys in CI; that establishes XML/property-list syntax and the intended field values only. It does not establish that iOS 12.5.7 launchd accepts or starts the job. The `RunAtLoad`, identity, log-path, and shutdown behavior remain device gates.
+The plist is packaged and P007 stages an inactive copy at `/var/lib/ios-unsandboxed/com.ios-unsandboxed.daemon.plist.inactive`. Ordinary package install and upgrade do not copy it to `/Library/LaunchDaemons` or invoke `launchctl`. P008 adds explicit manager service commands behind a fixed-argument adapter. Python's host `plistlib` parses and checks its keys in CI; that establishes XML/property-list syntax and intended values only. The iOS 12.5.7 launchctl syntax, `RunAtLoad`, identity, log-path, and shutdown behavior remain device gates.
 
-P007's manager verifies the project package and owned files but does not load this job. A future lifecycle manager must additionally verify the daemon and CLI files, the `iu` symlink, state/data/native/log directories, state permissions, and log paths before explicit registration. It must preserve backups and be able to remove or restore only project-owned files. It must never change Apple or Amethyst-owned jobs and must not install an app container. P007's uninstall refuses while the active project plist path exists because service quiescence belongs to that later lifecycle implementation.
+P008 verifies the P007 manifest, disabled state, daemon and staged plist before explicit registration, and refuses upgrade/uninstall while the active project plist is present. Registration requires `--apply --confirm --acknowledge-run-at-load`; see the [controller](launchd-service-controller.md), [registration](service-registration.md), and [recovery](service-recovery.md) contracts. The active plist is compared to the verified staged template, and only the fixed project label is queried, started, stopped, or unloaded. Host mocks are not iOS launchd evidence.
 
 ## Socket authorization
 

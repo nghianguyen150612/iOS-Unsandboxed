@@ -520,6 +520,7 @@ def test_reference_device_id_contract() -> None:
     harness = (ROOT / "tests/device/ios-runtime-qualification.sh").read_text(encoding="utf-8")
     assert 'strcmp(machine,"iPad4,4")' in installer, "installer must accept A1489/iPad4,4"
     assert "iPad4,1" not in installer, "iPad4,1 identifies a different Apple device"
+    assert "--test-root is available only in the host fixture helper" in installer, "production helper must not enter fixture mode"
     assert 'strcmp(facts.machine.value, "iPad4,4")' in preflight
     assert '[ "$HW_MACHINE" = iPad4,4 ]' in harness
 

@@ -19,6 +19,8 @@ There are no optional keys, comments, secrets, directories, executable paths, Am
 
 The `service_installation=installed` line is a root-owned installation marker. It does not prove that launchd loaded the job or that the daemon is running. Amethyst compatibility is re-probed; device acceptance is external evidence and is never loaded from this file. Neither marker is execution authorization.
 
+P008 stores launchd registration bookkeeping separately in `service-registration` with its own bounded schema v1. This file is removed after verified unregister/recovery. It does not authorize execution unsandboxing, and P008 never changes `execution_activation=disabled`.
+
 [`packaging/rootful/install-state.example`](../../packaging/rootful/install-state.example) is a package template. P007 writes the canonical state only after all project files and the ownership manifest have been staged and verified. The writer emits the same four lines shown above, uses a unique same-directory temporary file, restrictive mode, file sync, atomic rename, and parent-directory sync where supported. It preserves the prior record in the verified backup generation and uses the P005 reader to verify the result. It never writes an enabled activation value.
 
 ## Ownership and read rules
