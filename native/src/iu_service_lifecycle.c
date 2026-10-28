@@ -1,4 +1,7 @@
 #define _GNU_SOURCE 1
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
 #include "iu_service_lifecycle.h"
 
 #include <errno.h>
