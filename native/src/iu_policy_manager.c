@@ -30,7 +30,7 @@ int iu_policy_preview(const struct iu_policy_store *s,int rootfd,const char *roo
     (void)iu_policy_evaluate_v1(&config,&facts,&operational);
     config.enabled=1;config.compatibility_status=IU_COMPAT_SUPPORTED_AND_VERIFIED;
     (void)iu_policy_evaluate_v1(&config,&facts,&simulated);
-    printf("P003 operational result: %s\nP003 simulated scope result: %s\n",iu_policy_outcome_name_v1(operational.outcome),iu_policy_outcome_name_v1(simulated.outcome));
+    printf("P003 operational result: %s\nP003 simulated directory scope result (NOT artifact eligibility): %s\n",iu_policy_outcome_name_v1(operational.outcome),iu_policy_outcome_name_v1(simulated.outcome));
     printf("Identity: device=%llu inode=%llu size=%llu sha256=",(unsigned long long)plan.device_number,(unsigned long long)plan.inode,(unsigned long long)plan.file_size);
     for(unsigned i=0;i<IU_EXECUTION_PLAN_SHA256_SIZE;i++)printf("%02x",plan.sha256[i]);
     printf("\nArchitecture: %u\nMach-O file type: %u\nSignature classification: %s\nP009 adapter: %s\nMissing prerequisites mask: 0x%x\n",plan.architecture,plan.macho_filetype,iu_ame_macho_state_name_v1(plan.macho_state),iu_ame_compatibility_name_v1(plan.adapter_compatibility),plan.missing_prerequisites);
@@ -48,9 +48,12 @@ int iu_policy_preview(const struct iu_policy_store *s,int rootfd,const char *roo
     else if(plan.architecture!=IU_ARCH_ARM64 || plan.macho_filetype!=2 || plan.signature_preparation==IU_EXECUTION_PREP_UNSUPPORTED_TARGET || plan.signature_preparation==IU_EXECUTION_PREP_INVALID_BINARY)reason="UNSUPPORTED_MACHO";
     else if(plan.signature_preparation==IU_EXECUTION_PREP_MISSING_SIGNATURE_COMMAND)reason="MISSING_SIGNATURE_COMMAND";
     else if(plan.signature_preparation==IU_EXECUTION_PREP_REQUIRES_REPAIR)reason="PREPARATION_NOT_IMPLEMENTED";
-    else reason="HYPOTHETICALLY_ELIGIBLE";
+    /* A scope match proves only path membership. An arbitrary copy of an Apple
+     * system executable has indistinguishable ownership/path metadata here.
+     * Without independently verified artifact provenance, fail closed. */
+    else reason="ARTIFACT_PROVENANCE_UNVERIFIED";
 report:
-    printf("Preview: %s\nBackend: BACKEND_UNVERIFIED\nPreparation: NOT_IMPLEMENTED\nDevice runtime verified: false\nOperational authorization: false\n",reason);
+    printf("Preview: %s\nArtifact provenance: UNVERIFIED (no trusted proof that a copied file is not an Apple or other protected executable)\nBackend: BACKEND_UNVERIFIED\nPreparation: NOT_IMPLEMENTED\nDevice runtime verified: false\nOperational authorization: false\n",reason);
     puts("Hypothetical matching assumes a verified backend only for simulation; installed build, live hooks, signature acceptance and launch are unverified.");
     return 0;
 }
