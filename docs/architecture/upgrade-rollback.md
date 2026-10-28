@@ -21,3 +21,5 @@ Filesystem rollback restores project-owned files only. P007 creates no kernel-re
 P007 never installs the plist into `/Library/LaunchDaemons`. If the active project plist path exists, uninstall is blocked pending the separately reviewed service-lifecycle implementation. The command does not stop a daemon, invoke `launchctl`, or remove Apple/Amethyst jobs. P007 does not create log files or a project log directory; there are no P007 logs to delete. The persistent advisory lock file under `/var/lib` remains so a future manager does not race lock-file replacement.
 
 Repeated uninstall returns success when no verified install manifest remains and leaves any unowned remnants for review. A transaction journal remains after interrupted work; run `recover --apply` before retrying a mutating command.
+
+P011 policy is independent of package generations: valid policy is preserved across upgrades and rollbacks, unsupported/corrupt policy blocks those operations, and uninstall preserves it for review. See [policy recovery](policy-recovery.md).

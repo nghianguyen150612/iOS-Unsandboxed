@@ -82,3 +82,7 @@ P007 does not create native hooks or a runtime socket. P008 creates the project 
 Package metadata records one of `unsigned`, `adhoc_signed`, `signed_unverified`, `signature_verification_passed`, or `unknown`, plus the result of local signature verification. The builder does not run `codesign`, `ldid`, or a jailbreak bypass to change signing state. An unsigned or ad-hoc package is not evidence of iOS startup or AMFI/Amethyst acceptance. SHA-256 records detect payload mismatch against the manifest; P007 has no package-signing key and therefore does not claim package provenance authentication.
 
 All physical-device installer, filesystem, ownership, trust, SSH recovery, launchd, upgrade, rollback, reboot, and Amethyst gates remain **NOT RUN** until evidence is collected on the reference iPad. Host fixtures and Apple cross-compilation do not change those results.
+
+## P011 policy
+
+The manager's `policy` group stores only preview configuration in a separate private file. See [root execution policy](root-execution-policy.md) for commands and eligibility, [storage](policy-storage-contract.md) for schema and atomic updates, and [recovery](policy-recovery.md) for upgrade, rollback, and uninstall preservation. Package install and service start do not activate execution.

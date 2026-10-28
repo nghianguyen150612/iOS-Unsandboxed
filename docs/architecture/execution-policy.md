@@ -64,3 +64,5 @@ P010's local planner passes descriptor-derived target facts to this evaluator an
 `tests/native-preflight-test.c` uses a temporary host fixture and synthetic platform/configuration facts. It covers compatibility classification, missing components, unsupported OS and device/version facts, disabled and unverified policy, protected Apple/Amethyst/project paths, prefix-boundary cases, relative/absolute paths, symlinks, hard links, directories, FIFO files, setuid/setgid modes, unsafe permissions/ownership, identity mismatch, malformed configuration, missing paths, and a hypothetical eligible regular executable. Tests require no root and do not touch jailbreak files. Passing these tests is simulated host-policy evidence, not device compatibility.
 
 No user-data directory is enabled by P003. No persistent policy is loaded. No command can use the evaluator to launch, sign, trust, modify, install, or unsandbox an executable.
+
+P011 adds a root-controlled preview-only store. The production P003 context remains disabled; an explicit temporary simulation checks scopes without producing execution authorization. See [root execution policy](root-execution-policy.md).
