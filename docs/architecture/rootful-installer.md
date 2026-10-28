@@ -1,6 +1,6 @@
 # Rootful installer manager (P007)
 
-P007 adds a project-owned package and management entrypoint for the v0.1.0 rootful layout. It installs the CLI, daemon, `iu` symlink, manager helper, path contract, passive plist template, and disabled schema-v1 state. It does not activate execution, register a LaunchDaemon, invoke `launchctl`, prepare a user binary, or change Amethyst state.
+P007 adds a project-owned package and management entrypoint for the v0.1.0 rootful layout. P008 extends the same C17 `installer-helper` with explicit service lifecycle commands. Neither release activates execution, prepares a user binary, or changes Amethyst state.
 
 ## Package and manager
 
@@ -26,11 +26,20 @@ manager.sh rollback --apply
 manager.sh uninstall
 manager.sh uninstall --apply
 manager.sh recover --apply
+manager.sh service plan
+manager.sh service status
+manager.sh service register --apply --confirm --acknowledge-run-at-load
+manager.sh service start --apply --confirm
+manager.sh service stop --apply --confirm
+manager.sh service unregister --apply --confirm
+manager.sh service recover --apply --confirm
 ```
 
 `install`, `upgrade`, `rollback`, `uninstall`, and `recover` are read-only unless `--apply` is present. Install and upgrade require `--package DIR`. The `plan` command validates the package and current manifest, then reports whether it would install or upgrade. `status` verifies the manager manifest and disabled state; it does not infer that a daemon process or launchd job is running from files on disk.
 
 Production mutation requires effective UID 0, an identifiable `iPad4,4` (A1489), iOS 12.5.7, the expected rootful Procursus paths, `root:wheel` ownership, and safe non-group/world-writable parent directories. A package's payload paths, file types, modes, SHA-256 values, and Mach-O ARM64/iOS 12.0 headers are checked before staging. There is no force option. If the device cannot be identified or a destination is occupied by a foreign file, mutation fails.
+
+Service-changing commands require both `--apply` and `--confirm`. Registration also requires `--acknowledge-run-at-load` because the unchanged plist has `RunAtLoad=true` and may start the daemon as a side effect of `launchctl load`. Package install and upgrade remain passive; upgrade, rollback, and uninstall are blocked while the active plist or P008 service record/journal exists. P008's launchctl command spelling is implemented as the legacy `load`, `unload`, `start`, `stop`, and `list` family, but acceptance on iOS 12.5.7 is **NOT RUN**; unsupported or ambiguous launchctl state fails closed.
 
 ### Host fixture mode
 
@@ -47,7 +56,7 @@ manager.sh install --package ./package --test-root "$IU_FIXTURE" --apply
 manager.sh status --test-root "$IU_FIXTURE"
 ```
 
-Fixture ownership is simulated with the host process UID/GID. Fixture success is not device installation evidence. The fixture mode never invokes `launchctl` and does not redirect production paths through environment variables.
+Fixture ownership is simulated with the host process UID/GID. Fixture success is not device installation evidence. P008's test-only helper accepts a rooted mock executable through `IU_LAUNCHCTL_MOCK`; a fixture without that explicit mock refuses adapter calls instead of invoking host `/bin/launchctl`. The mock and fixture socket are rooted under private temporary directories.
 
 ## Owned layout
 
@@ -66,7 +75,7 @@ The manager owns these installed files only:
 
 The separate `install-manifest` records schema, project version, package generation, backup generation, signing status, and each file's fixed path, type, mode, owner, group, and SHA-256. Its parser accepts only the known project paths and bounded schema v1. It does not source or evaluate fields. The `backups/` and `staging/` directories are private mode `0700` subdirectories. `/var/lib/.ios-unsandboxed-installer.lock` is a persistent root-owned advisory-lock file so a process crash releases the lock without leaving a stale lock directory.
 
-P007 does not create native hooks, a runtime socket, or log files. The plist stays under the private project data directory; its canonical active destination remains `/Library/LaunchDaemons/com.ios-unsandboxed.daemon.plist` for a later lifecycle component. The plist has `RunAtLoad=true`, so P007 never copies it to that active destination or starts it.
+P007 does not create native hooks or a runtime socket. P008 creates the project log directory only during explicitly authorized registration after verifying its parent and owner. The plist stays staged under the private project data directory until explicit registration. The active destination is `/Library/LaunchDaemons/com.ios-unsandboxed.daemon.plist`.
 
 ## Signing and evidence
 

@@ -30,8 +30,8 @@ manager.sh recover [--apply]
 
 Commands are read-only unless `--apply` is supplied. The manager accepts a package directory, not a tar archive. The helper validates SHA-256 records, the strict package/ownership schemas, fixed destinations, ownership and modes, and ARM64 iOS Mach-O headers. It uses no post-install scripts or hooks.
 
-Host fixtures select `--test-root ABSOLUTE_PRIVATE_DIRECTORY`; this explicitly redirects only the fixed path table into a private fixture and never invokes launchd. Fixture results are host evidence only. Production writes require root on the reference `iPad4,1`, iOS 12.5.7, with safe rootful `root:wheel` layout checks.
+Host fixtures select `--test-root ABSOLUTE_PRIVATE_DIRECTORY`; this explicitly redirects the fixed path table into a private fixture. Service tests invoke only the explicit fixture launchctl mock; no physical host launchctl or production socket is used. Fixture results are host evidence only. Production writes require root on the reference `iPad4,4`, iOS 12.5.7, with safe rootful `root:wheel` layout checks.
 
-The passive plist remains packaged at `/var/lib/ios-unsandboxed/com.ios-unsandboxed.daemon.plist.inactive`. Do not copy it to `/Library/LaunchDaemons` during a normal P007 install: `RunAtLoad=true` could start the job after registration. P007 does not register or start the service.
+The passive plist remains staged at `/var/lib/ios-unsandboxed/com.ios-unsandboxed.daemon.plist.inactive`. Ordinary package install and upgrade never register or start the service. Explicit service registration requires `--apply --confirm --acknowledge-run-at-load`; the acknowledgement names the possibility that `RunAtLoad=true` starts the daemon during `launchctl load`. See the P008 service controller documents for exact commands and device gates.
 
 See [the package format](../../docs/architecture/package-format.md), [manager contract](../../docs/architecture/rootful-installer.md), and [transaction behavior](../../docs/architecture/install-transactions.md).

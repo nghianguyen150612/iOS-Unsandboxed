@@ -10,14 +10,16 @@ HOST_INSTALLER_HELPER := build/host/installer-helper
 IOS_DAEMON := build/ios/ios-unsandboxedd
 IOS_INSTALLER_HELPER := build/ios/installer-helper
 NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c
+LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test package-rootful device-harness-test smoke-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
 	  'make build       Build the host CLI and diagnostic daemon' \
-	  'make test        Run Rust, native, IPC, and host smoke checks' \
+	  'make test        Run Rust, native, IPC, package, lifecycle, and host smoke checks' \
+	  'make service-test Run mocked service lifecycle fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
@@ -37,7 +39,7 @@ host-build:
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) -Idaemon/include \
 	  daemon/src/main.c daemon/src/ipc_server.c daemon/src/peer_auth.c $(NATIVE_SOURCES) -o $(HOST_DAEMON)
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_INSTALLER_TESTING $(NATIVE_INCLUDES) \
-	  native/src/iu_installer.c native/src/iu_service_state.c -o $(HOST_INSTALLER_HELPER)
+	  native/src/iu_installer.c native/src/iu_service_state.c $(LIFECYCLE_SOURCE) -o $(HOST_INSTALLER_HELPER)
 
 test: host-build
 	cargo test --locked --workspace
@@ -45,6 +47,7 @@ test: host-build
 	$(MAKE) ipc-test
 	$(MAKE) packaging-test
 	$(MAKE) installer-test
+	$(MAKE) service-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -73,6 +76,9 @@ packaging-test:
 installer-test: host-build
 	python3 tests/packaging/installer-integration.py $(HOST_INSTALLER_HELPER)
 
+service-test: host-build
+	python3 tests/service/service-lifecycle-test.py $(HOST_INSTALLER_HELPER)
+
 device-harness-test:
 	python3 tests/device/host-fixture-test.py
 
@@ -98,7 +104,7 @@ build-ios: check-ios-toolchain
 	xcrun --sdk iphoneos clang -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
 	  -target arm64-apple-ios$(IOS_DEPLOYMENT_TARGET) \
 	  -isysroot "$$(xcrun --sdk iphoneos --show-sdk-path)" \
-	  native/src/iu_installer.c native/src/iu_service_state.c -o $(IOS_INSTALLER_HELPER)
+	  native/src/iu_installer.c native/src/iu_service_state.c $(LIFECYCLE_SOURCE) -o $(IOS_INSTALLER_HELPER)
 
 package-rootful: build-ios
 	python3 scripts/build-rootful-package.sh

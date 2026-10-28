@@ -112,7 +112,7 @@ manager.sh uninstall --apply
 manager.sh recover --apply
 ```
 
-Production mutation is limited to effective UID 0 on the reference `iPad4,1` (A1489), iOS 12.5.7, with safe rootful `root:wheel` directories and no foreign destination collisions. Host tests use `--test-root` with an isolated directory and simulated ownership; they are not device evidence. The manager stages the LaunchDaemon plist under private project data and never registers it, invokes `launchctl`, or starts the service. See [rootful installer](docs/architecture/rootful-installer.md), [transactions](docs/architecture/install-transactions.md), [package format](docs/architecture/package-format.md), and [upgrade/rollback](docs/architecture/upgrade-rollback.md).
+Production mutation is limited to effective UID 0 on the reference `iPad4,4` (A1489), iOS 12.5.7, with safe rootful `root:wheel` directories and no foreign destination collisions. Host tests use `--test-root` with an isolated directory and simulated ownership; they are not device evidence. Package installation stages the LaunchDaemon plist but does not register it. Explicit lifecycle commands and their device-only limitations are documented in [launchd service controller](docs/architecture/launchd-service-controller.md), [registration](docs/architecture/service-registration.md), and [recovery](docs/architecture/service-recovery.md).
 
 ## Security and current limitations
 
