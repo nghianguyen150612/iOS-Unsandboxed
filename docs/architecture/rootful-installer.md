@@ -30,7 +30,7 @@ manager.sh recover --apply
 
 `install`, `upgrade`, `rollback`, `uninstall`, and `recover` are read-only unless `--apply` is present. Install and upgrade require `--package DIR`. The `plan` command validates the package and current manifest, then reports whether it would install or upgrade. `status` verifies the manager manifest and disabled state; it does not infer that a daemon process or launchd job is running from files on disk.
 
-Production mutation requires effective UID 0, an identifiable `iPad4,1` (A1489), iOS 12.5.7, the expected rootful Procursus paths, `root:wheel` ownership, and safe non-group/world-writable parent directories. A package's payload paths, file types, modes, SHA-256 values, and Mach-O ARM64/iOS 12.0 headers are checked before staging. There is no force option. If the device cannot be identified or a destination is occupied by a foreign file, mutation fails.
+Production mutation requires effective UID 0, an identifiable `iPad4,4` (A1489), iOS 12.5.7, the expected rootful Procursus paths, `root:wheel` ownership, and safe non-group/world-writable parent directories. A package's payload paths, file types, modes, SHA-256 values, and Mach-O ARM64/iOS 12.0 headers are checked before staging. There is no force option. If the device cannot be identified or a destination is occupied by a foreign file, mutation fails.
 
 ### Host fixture mode
 
