@@ -65,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix="iu-policy-") as td:
     binary.write_bytes(planner.macho())
     binary.chmod(0o755)
     result = run("preview", "/opt/ios-unsandboxed-scopes/one/tool")
-    assert "HYPOTHETICALLY_ELIGIBLE" in result and "Operational authorization: false" in result and "DENY_DISABLED" in result, result
+    assert "HYPOTHETICALLY_ELIGIBLE" in result and "Operational authorization: false" in result and "DENY_DISABLED" in result and "P009 capability" in result, result
     assert "OUTSIDE_ALLOWED_SCOPE" in run("preview", "/opt/ios-unsandboxed-scopes/two/tool")
     binary.write_bytes(planner.macho(signature="none"))
     assert "MISSING_SIGNATURE_COMMAND" in run("preview", "/opt/ios-unsandboxed-scopes/one/tool")

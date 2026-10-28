@@ -8,7 +8,7 @@
 
 int iu_policy_preview(const struct iu_policy_store *s,int rootfd,const char *root,int fixture,uid_t uid,gid_t gid,const char *target) {
     struct iu_policy_config_v1 config; struct iu_policy_target_v1 facts;
-    struct iu_policy_result_v1 simulated,operational; struct iu_execution_plan_v1 plan;
+    struct iu_policy_result_v1 simulated,operational; struct iu_execution_plan_v1 plan; struct iu_ame_probe_result_v1 probe;
     char physical[IU_POLICY_PATH_CAPACITY],parent[IU_POLICY_PATH_CAPACITY]; const char *reason="UNSAFE_TARGET"; char *slash; int matched=0;
     memset(&config,0,sizeof(config));config.abi_version=IU_POLICY_ABI_VERSION;config.struct_size=sizeof(config);
     config.expected_owner_uid=(uint32_t)uid; config.eligible_directory_count=s->count;
@@ -34,6 +34,14 @@ int iu_policy_preview(const struct iu_policy_store *s,int rootfd,const char *roo
     printf("Identity: device=%llu inode=%llu size=%llu sha256=",(unsigned long long)plan.device_number,(unsigned long long)plan.inode,(unsigned long long)plan.file_size);
     for(unsigned i=0;i<IU_EXECUTION_PLAN_SHA256_SIZE;i++)printf("%02x",plan.sha256[i]);
     printf("\nArchitecture: %u\nMach-O file type: %u\nSignature classification: %s\nP009 adapter: %s\nMissing prerequisites mask: 0x%x\n",plan.architecture,plan.macho_filetype,iu_ame_macho_state_name_v1(plan.macho_state),iu_ame_compatibility_name_v1(plan.adapter_compatibility),plan.missing_prerequisites);
+    memset(&probe,0,sizeof(probe));
+    if(iu_ame_adapter_probe_v1(&probe)==0 && probe.capabilities.abi_version==IU_AME_CAPABILITY_ABI_VERSION && probe.capabilities.struct_size==sizeof(probe.capabilities) && probe.capabilities.record_count==IU_AME_CAPABILITY_COUNT){
+        for(unsigned i=0;i<probe.capabilities.record_count;i++){
+            const struct iu_ame_capability_record_v1 *record=&probe.capabilities.records[i];
+            if(record->capability_id==IU_AME_CAP_ARM64_MACHO_INSPECTION || record->capability_id==IU_AME_CAP_FUTURE_EXECUTION_ADAPTER)
+                printf("P009 capability %s: %s (evidence=%u)\n",iu_ame_capability_name_v1(record->capability_id),iu_ame_capability_status_name_v1(record->status),record->evidence_type);
+        }
+    } else puts("P009 capabilities: unavailable");
     if(simulated.outcome==IU_POLICY_SKIP_NOT_TARGETED)reason="OUTSIDE_ALLOWED_SCOPE";
     else if(simulated.outcome==IU_POLICY_DENY_IDENTITY_MISMATCH)reason="IDENTITY_MISMATCH";
     else if(simulated.outcome!=IU_POLICY_ALLOW_ELIGIBLE)reason="UNSAFE_TARGET";
