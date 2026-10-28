@@ -6,20 +6,22 @@ HOST_DAEMON := build/host/ios-unsandboxedd
 HOST_NATIVE_TEST := build/host/native-preflight-test
 HOST_PEER_AUTH_TEST := build/host/peer-auth-test
 HOST_STATE_TEST := build/host/service-state-test
+HOST_ADAPTER_TEST := build/host/amethyst-adapter-test
 HOST_INSTALLER_HELPER := build/host/installer-helper
 IOS_DAEMON := build/ios/ios-unsandboxedd
 IOS_INSTALLER_HELPER := build/ios/installer-helper
-NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c
+NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c native/src/iu_amethyst_adapter.c native/src/iu_amethyst_capabilities.c
 LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
 	  'make build       Build the host CLI and diagnostic daemon' \
 	  'make test        Run Rust, native, IPC, package, lifecycle, and host smoke checks' \
 	  'make service-test Run mocked service lifecycle fixtures' \
+	  'make adapter-test Run read-only Amethyst adapter and Mach-O fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
@@ -48,6 +50,7 @@ test: host-build
 	$(MAKE) packaging-test
 	$(MAKE) installer-test
 	$(MAKE) service-test
+	$(MAKE) adapter-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -84,6 +87,19 @@ device-harness-test:
 
 smoke-test: host-build
 	./tests/host-smoke.sh
+
+adapter-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_AME_TESTING $(NATIVE_INCLUDES) \
+	  tests/adapter/amethyst-adapter-test.c tests/adapter/mock_backend.c \
+	  native/src/iu_amethyst_adapter.c native/src/iu_amethyst_capabilities.c \
+	  native/src/iu_policy.c native/src/iu_preflight.c -o $(HOST_ADAPTER_TEST)
+	./$(HOST_ADAPTER_TEST)
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  tests/adapter/production-classifier-test.c native/src/iu_amethyst_adapter.c \
+	  native/src/iu_amethyst_capabilities.c native/src/iu_policy.c native/src/iu_preflight.c \
+	  -o build/host/adapter-production-classifier-test
+	./build/host/adapter-production-classifier-test
 
 check-ios-toolchain:
 	@case "$$(uname -s)" in \

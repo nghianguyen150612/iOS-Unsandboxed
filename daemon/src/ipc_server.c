@@ -6,6 +6,7 @@
 #include "iu_peer_auth.h"
 #include "iu_ipc_protocol.h"
 #include "iu_preflight.h"
+#include "iu_amethyst_adapter.h"
 #include "iu_service_state.h"
 
 #include <errno.h>
@@ -130,6 +131,23 @@ static uint32_t dispatch(uint16_t type, const struct iu_peer_identity *peer,
         for(size_t i=0;i<4;i++) { uint32_t n=texts[i]->length; if(n>IU_PREFLIGHT_TEXT_CAPACITY-1) return IU_IPC_INTERNAL_ERROR; out[pos++]=(unsigned char)n; memcpy(out+pos,texts[i]->value,n); pos+=n; }
         *out_len=pos; return r.compatibility_status==IU_COMPAT_UNSUPPORTED_PLATFORM?IU_IPC_UNSUPPORTED_PLATFORM:
             r.compatibility_status==IU_COMPAT_UNVERIFIED?IU_IPC_PREFLIGHT_UNVERIFIED:IU_IPC_SUCCESS;
+    }
+    if(type==IU_IPC_GET_AMETHYST_ADAPTER) {
+        struct iu_ame_probe_result_v1 adapter;
+        if(iu_ame_adapter_probe_v1(&adapter)!=0) return IU_IPC_INTERNAL_ERROR;
+        /* Additive read-only payload: ABI byte, six big-endian u32 values,
+         * and the fixed pinned source revision. Component paths/hashes are
+         * deliberately not exposed over IPC. */
+        out[0]=1;
+        wr32(out+1,adapter.compatibility);
+        wr32(out+5,adapter.build_evidence);
+        wr32(out+9,adapter.launchd_hook_evidence);
+        wr32(out+13,adapter.base_hook_evidence);
+        wr32(out+17,adapter.components[0].file_type);
+        wr32(out+21,adapter.components[1].file_type);
+        memcpy(out+25,adapter.source_revision.value,40);
+        *out_len=65;
+        return IU_IPC_SUCCESS;
     }
     if(type==IU_IPC_ENABLE || type==IU_IPC_DISABLE || type==IU_IPC_SET_POLICY) {
         if(!iu_peer_authorize_management(peer)) return IU_IPC_PERMISSION_DENIED;

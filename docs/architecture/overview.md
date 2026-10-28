@@ -9,21 +9,23 @@ Rust CLI (ios-unsandboxed)
         v
 C17 daemon (ios-unsandboxedd)
         |
-        | Future product-owned platform interface; absent in P003
+        | Versioned project-owned interface; read-only in P009
         v
-Native execution layer
+P003 preflight and execution policy
         |
-        | Isolated, version-validated adapter
+        | Read-only contract (P009)
         v
-Amethyst integration backend
+Amethyst compatibility adapter
         |
-        v
-Existing jailbreak launch/signing/trust mechanisms
+        +-- source/build provenance and component evidence
+        +-- capability classifications
+        +-- bounded Mach-O inspection
+        +-- hypothetical P003 preview
 ```
 
-The Rust CLI owns user-facing command parsing, diagnostics, configuration, and error reporting. `iu doctor` performs read-only diagnostics directly and does not call a companion through `PATH`. The C17 daemon is the future long-running service boundary for native Darwin integration. `ios-unsandboxedd --probe` calls the P003 C17 preflight module. The reusable native policy evaluator is separate from Amethyst and currently has no execution caller.
+The Rust CLI owns user-facing command parsing, diagnostics, configuration, and error reporting. `iu doctor` performs read-only diagnostics directly and does not call a companion through `PATH`; `doctor --amethyst` can also request the daemon's additive read-only adapter status. The C17 daemon is the long-running service boundary for native Darwin integration. `ios-unsandboxedd --probe` calls the P003 C17 preflight module. The reusable native policy evaluator remains authoritative for hypothetical eligibility.
 
-P003 implements a versioned C17 compatibility result and a deterministic fail-closed eligibility policy. P004 adds authenticated IPC; P005 adds a read-only persistent-state loader, an additive lifecycle diagnostic, and a passive LaunchDaemon template. P007 adds a separate rootful package manager with a narrowly scoped installer-only writer for the existing disabled state schema. There is still no native Amethyst backend, launch hook, signing implementation, or trust-cache integration. The daemon runs in the foreground only after an explicit start request; P007 installs the project files but keeps the plist private and inactive. Execution activation remains disabled. Compatibility remains unverified unless exact installed Amethyst provenance and device evidence can be established; current probes do not establish that proof.
+P003 implements a versioned C17 compatibility result and a deterministic fail-closed eligibility policy. P004 adds authenticated IPC; P005 adds a read-only persistent-state loader, an additive lifecycle diagnostic, and a passive LaunchDaemon template. P007/P008 add a separate rootful package manager and controlled LaunchDaemon lifecycle. P009 adds a project-owned read-only adapter ABI, evidence collector, capability contract, and safe Mach-O inspector. There is still no Amethyst runtime backend, launch hook, signing implementation, or trust-cache integration. The daemon runs only after an explicit start request. Execution activation remains disabled. Production compatibility cannot be promoted to verified without trusted installed-build identity and independent device hook evidence.
 
 ## Launch integration constraints
 
@@ -45,4 +47,4 @@ These paths and their interfaces may change. P003 does not import or call Amethy
 
 Host compilation checks source quality and basic command behavior. Apple ARM64 iOS cross-compilation checks the target toolchain and linker. Physical iPad execution checks the actual iOS 12.5.7, rootful Amethyst, and Procursus environment. These are independent gates; host or cross-compilation success is not device evidence.
 
-P003 leaves device validation **NOT RUN**: the workspace does not provide the reference iPad. The audited source revision, host fixture tests, and iOS cross-compilation cannot establish installed Amethyst provenance, hook initialization, SSH inheritance, signing/trust behavior, or runtime launch success.
+P009 leaves device validation **NOT RUN**: the workspace does not provide the reference iPad. The pinned source revision, host fixture tests, and iOS cross-compilation cannot establish installed Amethyst provenance, hook initialization, SSH inheritance, signing/trust behavior, or runtime launch success. Fully unsigned Mach-O support remains blocked/unverified.

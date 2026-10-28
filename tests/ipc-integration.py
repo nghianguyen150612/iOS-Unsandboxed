@@ -134,6 +134,22 @@ def main():
         check(ty == (3 | RESP) and code == 7 and len(body) >= 24, "GET_PREFLIGHT missing/invalid")
         check(struct.unpack("!I", body[:4])[0] == 4, "Linux was not reported unsupported")
 
+        # P009 adds a compact read-only adapter status without exposing paths or hashes.
+        _, _, ty, _, code, body = exchange(path, frame(5))
+        check(ty == (5 | RESP) and code == 0 and len(body) == 65,
+              "GET_AMETHYST_ADAPTER response invalid")
+        check(body[0] == 1 and struct.unpack("!I", body[1:5])[0] == 5,
+              "adapter ABI/platform compatibility was not reported")
+        check(body[25:] == b"61ce86d7d3f00e5395f4d42bebda0e5dce04946a",
+              "daemon did not report the pinned source provenance")
+        cli_ame = subprocess.run([cli, "--test-socket", str(path), "doctor", "--amethyst"],
+                                 timeout=4, capture_output=True, text=True)
+        check(cli_ame.returncode == 0, f"Amethyst diagnostic failed: {cli_ame.stderr}")
+        for text in ("Installed Amethyst build: UNVERIFIED", "Launchd hook: UNVERIFIED",
+                     "SSH exec interception: NOT TESTED", "Fully unsigned Mach-O support: BLOCKED",
+                     "Execution activation: DISABLED", "Device runtime validation: NOT RUN"):
+            check(text in cli_ame.stdout, f"Amethyst diagnostic omitted {text}")
+
         # A non-root peer cannot request management; root still gets NOT_IMPLEMENTED.
         _, _, _, _, code, _ = exchange(path, frame(0x100))
         check(code == (4 if os.geteuid() == 0 else 3), "management authorization result incorrect")

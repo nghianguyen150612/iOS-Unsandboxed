@@ -25,6 +25,7 @@ The total frame is at most 532 bytes. P004's implemented requests have empty bod
 | GET_STATUS | 2 | empty | 8 bytes: daemon responsive u8, compatibility enum u32, activation u8, interception implemented u8, device acceptance verified u8 |
 | GET_PREFLIGHT | 3 | empty | five u32 values (compatibility, system family, architecture, reference-device match, reference-OS match), then four u8-length-prefixed UTF-8 strings (machine, product version, build, kernel release) |
 | GET_LIFECYCLE_STATUS | 4 | empty | 22-byte P005 lifecycle payload described below |
+| GET_AMETHYST_ADAPTER | 5 | empty | 65-byte P009 payload described below |
 | ENABLE | `0x100` | empty | denied or not implemented |
 | DISABLE | `0x101` | empty | denied or not implemented |
 | SET_POLICY | `0x102` | empty | denied or not implemented |
@@ -50,6 +51,10 @@ Preflight fields are individually serialized; raw C result structures are never 
 | 18 | 4 | Kernel-authenticated peer GID, big endian |
 
 The lifecycle request is read-only and is served only after peer credential collection. The peer UID/GID fields let a physical-device test record native `getpeereid` results; they do not authorize a request. A valid state record is not execution authorization. P005 clients reject a device-acceptance value of one; future evidence needs a separately reviewed payload ABI. The P005 CLI falls back to the unchanged P004 `GET_STATUS` request when an older daemon returns `NOT_IMPLEMENTED` for request 4.
+
+### P009 Amethyst adapter payload
+
+`GET_AMETHYST_ADAPTER` adds read-only compatibility diagnostics without changing the P004 or P005 messages. Its 65-byte payload is ABI byte `1`, six big-endian u32 values (adapter compatibility, build evidence, launchd hook evidence, base hook evidence, launchd component file type, base component file type), then the fixed 40-byte Amethyst source revision. Candidate paths, hashes, owner IDs, and other filesystem details are not sent over IPC. Component presence does not prove hook activation. This payload reports project source provenance separately from installed build/runtime proof.
 
 ## Stable response statuses
 

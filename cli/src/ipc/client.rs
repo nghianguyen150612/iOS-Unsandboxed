@@ -57,6 +57,16 @@ pub struct Preflight {
     pub device_match: u32,
     pub os_match: u32,
 }
+#[derive(Debug)]
+pub struct AmethystAdapter {
+    pub compatibility: u32,
+    pub build_evidence: u32,
+    pub launchd_hook_evidence: u32,
+    pub base_hook_evidence: u32,
+    pub launchd_component: u32,
+    pub base_component: u32,
+    pub source_revision: String,
+}
 
 fn request(path: &Path, ty: u16) -> Result<(ErrorCode, Vec<u8>), IpcError> {
     let mut stream = UnixStream::connect(path).map_err(|e| IpcError(e.to_string()))?;
@@ -202,6 +212,46 @@ fn legacy_status_at(path: &Path) -> Result<Status, IpcError> {
 }
 pub fn get_preflight() -> Result<Preflight, IpcError> {
     preflight_at(Path::new(SOCKET))
+}
+pub fn get_amethyst_adapter() -> Result<AmethystAdapter, IpcError> {
+    amethyst_adapter_at(Path::new(SOCKET))
+}
+pub fn get_amethyst_adapter_test_socket(path: &Path) -> Result<AmethystAdapter, IpcError> {
+    amethyst_adapter_at(path)
+}
+fn amethyst_adapter_at(path: &Path) -> Result<AmethystAdapter, IpcError> {
+    let (_, b) = request(path, protocol::GET_AMETHYST_ADAPTER)?;
+    if b.len() != 65 || b[0] != 1 {
+        return Err(IpcError("invalid Amethyst adapter response".into()));
+    }
+    let mut values = [0u32; 6];
+    for (i, value) in values.iter_mut().enumerate() {
+        let p = 1 + i * 4;
+        *value = u32::from_be_bytes(b[p..p + 4].try_into().unwrap());
+    }
+    if values[0] > 8
+        || values[1] > 3
+        || values[2] > 2
+        || values[3] > 2
+        || values[4] > 5
+        || values[5] > 5
+    {
+        return Err(IpcError("invalid Amethyst adapter evidence enum".into()));
+    }
+    let source_revision = std::str::from_utf8(&b[25..65])
+        .map_err(|_| IpcError("invalid source revision encoding".into()))?;
+    if source_revision.len() != 40 || !source_revision.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(IpcError("invalid source revision".into()));
+    }
+    Ok(AmethystAdapter {
+        compatibility: values[0],
+        build_evidence: values[1],
+        launchd_hook_evidence: values[2],
+        base_hook_evidence: values[3],
+        launchd_component: values[4],
+        base_component: values[5],
+        source_revision: source_revision.to_owned(),
+    })
 }
 fn preflight_at(path: &Path) -> Result<Preflight, IpcError> {
     let (_, b) = request(path, protocol::GET_PREFLIGHT)?;
@@ -369,6 +419,29 @@ mod tests {
             &body,
         );
         assert!(status_at(&path).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn amethyst_adapter_payload_is_fixed_and_source_pin_validated() {
+        let mut body = vec![1];
+        for value in [5u32, 0, 0, 0, 0, 0] {
+            body.extend_from_slice(&value.to_be_bytes());
+        }
+        body.extend_from_slice(b"61ce86d7d3f00e5395f4d42bebda0e5dce04946a");
+        let path = fixture(
+            protocol::GET_AMETHYST_ADAPTER | protocol::RESPONSE,
+            1,
+            ErrorCode::Success as u32,
+            &body,
+        );
+        let adapter = amethyst_adapter_at(&path).unwrap();
+        assert_eq!(adapter.compatibility, 5);
+        assert_eq!(adapter.launchd_component, 0);
+        assert_eq!(
+            adapter.source_revision,
+            "61ce86d7d3f00e5395f4d42bebda0e5dce04946a"
+        );
         let _ = std::fs::remove_file(path);
     }
 }

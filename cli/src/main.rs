@@ -10,6 +10,7 @@ const USAGE: &str = "Usage: ios-unsandboxed <command> [arguments]\n\
 \n\
 Commands:\n\
   doctor                         Run read-only compatibility diagnostics\n\
+  doctor --amethyst               Inspect the read-only Amethyst adapter contract\n\
   status                         Show daemon lifecycle and activation status\n\
   inspect <binary>               Inspect a Mach-O binary (not implemented)\n\
   sign <binary> [--entitlements <file>]\n\
@@ -30,6 +31,7 @@ enum Invocation {
     Help,
     Version,
     Doctor,
+    DoctorAmethyst(Option<OsString>),
     Status(Option<OsString>),
     TestCheck(OsString),
     ReservedCommand(&'static str),
@@ -57,6 +59,17 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
 
     match command {
         "doctor" if args.len() == 1 => Ok(Invocation::Doctor),
+        "doctor" if args.len() == 2 && args[1] == OsStr::new("--amethyst") => {
+            Ok(Invocation::DoctorAmethyst(None))
+        }
+        "--test-socket"
+            if args.len() == 4
+                && !args[1].is_empty()
+                && args[2] == OsStr::new("doctor")
+                && args[3] == OsStr::new("--amethyst") =>
+        {
+            Ok(Invocation::DoctorAmethyst(Some(args[1].clone())))
+        }
         "status" if args.len() == 1 => Ok(Invocation::Status(None)),
         "--test-socket"
             if args.len() == 3 && !args[1].is_empty() && args[2] == OsStr::new("status") =>
@@ -106,6 +119,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Invocation::Doctor) => print_doctor(),
+        Ok(Invocation::DoctorAmethyst(socket)) => print_amethyst_doctor(socket.as_deref()),
         Ok(Invocation::Status(test_socket)) => print_status(test_socket.as_deref()),
         Ok(Invocation::TestCheck(path)) => print_test_check(std::path::Path::new(&path)),
         Ok(Invocation::ReservedCommand(command)) => {
@@ -471,6 +485,101 @@ fn print_doctor() -> ExitCode {
     }
 }
 
+fn print_amethyst_doctor(test_socket: Option<&OsStr>) -> ExitCode {
+    const PIN: &str = "61ce86d7d3f00e5395f4d42bebda0e5dce04946a";
+    let adapter = match test_socket {
+        Some(path) => ipc::get_amethyst_adapter_test_socket(std::path::Path::new(path)),
+        None => ipc::get_amethyst_adapter(),
+    };
+    println!("iOS-Unsandboxed Amethyst Adapter v1");
+    println!("Source revision: {PIN} (audited source provenance)");
+    println!("Installed Amethyst build: UNVERIFIED");
+    println!("Launchd hook: UNVERIFIED");
+    println!("Base hook: UNVERIFIED");
+    println!("SSH exec interception: NOT TESTED");
+    println!("Fully unsigned Mach-O support: BLOCKED");
+    println!("Execution activation: DISABLED");
+    match adapter {
+        Ok(status) => {
+            println!(
+                "Adapter compatibility: {}",
+                match status.compatibility {
+                    0 => "SUPPORTED_AND_VERIFIED",
+                    1 => "SOURCE_REVISION_KNOWN",
+                    2 => "INSTALLED_BUILD_UNVERIFIED",
+                    3 => "COMPONENT_MISSING",
+                    4 => "VERSION_MISMATCH",
+                    5 => "UNSUPPORTED_PLATFORM",
+                    6 => "HOOK_STATE_UNVERIFIED",
+                    7 => "ABI_INCOMPATIBLE",
+                    _ => "INTERNAL_ERROR",
+                }
+            );
+            println!(
+                "Launchd component: {}",
+                component_status_name(status.launchd_component)
+            );
+            println!(
+                "Base component: {}",
+                component_status_name(status.base_component)
+            );
+            println!(
+                "Build evidence: {}",
+                build_evidence_name(status.build_evidence)
+            );
+            println!(
+                "Launchd hook evidence: {}",
+                hook_evidence_name(status.launchd_hook_evidence)
+            );
+            println!(
+                "Base hook evidence: {}",
+                hook_evidence_name(status.base_hook_evidence)
+            );
+            println!("Daemon probe: AVAILABLE (read-only IPC v1)");
+            println!("Source pin returned by daemon: {}", status.source_revision);
+        }
+        Err(_) => {
+            println!("Adapter compatibility: UNKNOWN (daemon unavailable)");
+            println!("Launchd component: UNKNOWN (daemon unavailable)");
+            println!("Base component: UNKNOWN (daemon unavailable)");
+            println!("Daemon probe: UNAVAILABLE; local diagnostics remain usable");
+        }
+    }
+    println!("Device runtime validation: NOT RUN");
+    ExitCode::SUCCESS
+}
+
+fn component_status_name(state: u32) -> &'static str {
+    match state {
+        0 => "MISSING",
+        1 => "REGULAR FILE (presence only)",
+        2 => "SYMLINK REJECTED",
+        3 => "UNEXPECTED FILE TYPE",
+        4 => "UNREADABLE",
+        5 => "UNSAFE OR UNTRUSTED",
+        _ => "UNKNOWN",
+    }
+}
+
+fn build_evidence_name(state: u32) -> &'static str {
+    match state {
+        0 => "UNKNOWN",
+        1 => "PACKAGE VERSION REPORTED (binary build unverified)",
+        2 => "TRUSTED HASH MATCH (source/build compatibility still unverified)",
+        3 => "BUILD VERSION MISMATCH",
+        _ => "INVALID",
+    }
+}
+
+fn hook_evidence_name(state: u32) -> &'static str {
+    match state {
+        0 => "UNKNOWN",
+        1 => "REPORTED PRESENT (runtime activation unverified)",
+        2 => "INDEPENDENT DEVICE EVIDENCE",
+        _ => "INVALID",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{compatibility_state, parse_args, Invocation, UsageError};
@@ -532,6 +641,21 @@ mod tests {
     #[test]
     fn doctor_is_diagnostic_and_never_claims_unverified_compatibility() {
         assert_eq!(parse_args(&args(&["doctor"])), Ok(Invocation::Doctor));
+        assert_eq!(
+            parse_args(&args(&["doctor", "--amethyst"])),
+            Ok(Invocation::DoctorAmethyst(None))
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "--test-socket",
+                "/tmp/iu.sock",
+                "doctor",
+                "--amethyst"
+            ])),
+            Ok(Invocation::DoctorAmethyst(Some(OsString::from(
+                "/tmp/iu.sock"
+            ))))
+        );
         assert_ne!(compatibility_state(true), "SUPPORTED_AND_VERIFIED");
     }
 
