@@ -2,7 +2,7 @@
 
 Canonical device path: `/var/lib/ios-unsandboxed/install-state`.
 
-The P005 implementation is a **read-only loader**. There is no production state writer and no public IPC state mutation operation. Missing state does not prevent diagnostics and never implies that an installation or execution activation is present.
+P005 introduced a **read-only loader**. P007 adds a narrowly scoped state writer used only by the project rootful installer during an authorized, journaled transaction. There is still no public IPC state mutation operation. Missing state does not prevent diagnostics and never implies that an installation or execution activation is present.
 
 ## Schema version 1
 
@@ -19,7 +19,7 @@ There are no optional keys, comments, secrets, directories, executable paths, Am
 
 The `service_installation=installed` line is a root-owned installation marker. It does not prove that launchd loaded the job or that the daemon is running. Amethyst compatibility is re-probed; device acceptance is external evidence and is never loaded from this file. Neither marker is execution authorization.
 
-[`packaging/rootful/install-state.example`](../../packaging/rootful/install-state.example) is a source template only. It is not installed by P005. A future manager may create the canonical path only after all project files have been staged and validated.
+[`packaging/rootful/install-state.example`](../../packaging/rootful/install-state.example) is a package template. P007 writes the canonical state only after all project files and the ownership manifest have been staged and verified. The writer emits the same four lines shown above, uses a unique same-directory temporary file, restrictive mode, file sync, atomic rename, and parent-directory sync where supported. It preserves the prior record in the verified backup generation and uses the P005 reader to verify the result. It never writes an enabled activation value.
 
 ## Ownership and read rules
 
@@ -37,11 +37,11 @@ The loader returns one of these states:
 | 5 | Corrupt | Contents are malformed, truncated, or contain any non-disabled activation value. |
 | 6 | I/O error | State could not be safely read. |
 
-The state result always initializes execution activation to disabled. Unsupported, unsafe, missing, and corrupt files cannot set it. P005 has no operation that changes the field, and direct file manipulation cannot enable execution.
+The state result always initializes execution activation to disabled. Unsupported, unsafe, missing, and corrupt files cannot set it. P007's installer writer emits only the literal `disabled`, and direct file manipulation cannot enable execution.
 
-## Future atomic mutation contract
+## Installer-only atomic mutation contract (P007)
 
-Any future state mutation needs separate authorization and review. It must not be exposed through `ENABLE`, `DISABLE`, `SET_POLICY`, or another public management IPC operation without that review. A future root-only writer should:
+P007's state mutation is authorized only by the project installer or explicit recovery command. It is not exposed through `ENABLE`, `DISABLE`, `SET_POLICY`, or another public management IPC operation. The manager:
 
 1. Open and validate the real root-owned `0700` data directory by descriptor.
 2. Create a unique temporary file in that directory using exclusive creation, no-follow flags, mode `0600`, and the expected owner/group.
@@ -51,4 +51,4 @@ Any future state mutation needs separate authorization and review. It must not b
 
 Readers open a descriptor and see either the old or new complete file across atomic replacement. P005 fixture tests simulate interruption before rename and concurrent atomic replacement; these tests do not imply that a production writer exists. An orphan temporary file is ignored and is never treated as canonical state.
 
-The daemon uses a read-only status loader and no writer API. `iu enable` and `iu disable` continue to return `NOT_IMPLEMENTED` without changing the state file.
+The daemon continues to use a read-only status loader and has no writer API. `iu enable` and `iu disable` continue to return `NOT_IMPLEMENTED` without changing the state file. An installed service marker remains an installation fact, not execution authorization.

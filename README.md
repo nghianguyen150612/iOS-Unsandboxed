@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0 · **License:** MIT
 
-iOS-Unsandboxed is an experimental, SSH-oriented foundation for running compatible Mach-O ARM64 command-line programs on a rootful jailbroken iPad. It has no graphical interface. P001 established the project layout and rootful path contract. P003 adds read-only diagnostics and a side-effect-free native eligibility policy. P004 adds authenticated local CLI-to-daemon IPC. P005 adds a read-only disabled-state loader, richer lifecycle status, and a passive LaunchDaemon template. No release enables the experimental execution engine, prepares binaries, changes sandboxes, or activates launch interception.
+iOS-Unsandboxed is an experimental, SSH-oriented foundation for running compatible Mach-O ARM64 command-line programs on a rootful jailbroken iPad. It has no graphical interface. P001 established the project layout and rootful path contract. P003 adds read-only diagnostics and a side-effect-free native eligibility policy. P004 adds authenticated local CLI-to-daemon IPC. P005 adds a read-only disabled-state loader, richer lifecycle status, and a passive LaunchDaemon template. P007 adds an offline package builder and project-owned transactional installer with rollback. No release enables the experimental execution engine, prepares user binaries, changes sandboxes, or activates launch interception.
 
 ## Scope and reference device
 
@@ -23,14 +23,14 @@ chmod +x ./binary
 ./binary
 ```
 
-That workflow is aspirational. `enable` and all other operational commands currently fail as unimplemented. Transparent preparation of signatures, entitlements, or jailbreak trust mechanisms is not implemented. Executables without `LC_CODE_SIGNATURE` are a critical future experiment; P001 makes no claim that they can run. No kernel exploit or kernel patch is part of this project.
+That workflow is aspirational. CLI operations such as `enable`, `disable`, signing, and user-binary installation still fail as unimplemented. The separate rootful project manager can install and maintain only this project's own package. Transparent preparation of signatures, entitlements, or jailbreak trust mechanisms is not implemented. Executables without `LC_CODE_SIGNATURE` are a critical future experiment; P001 makes no claim that they can run. No kernel exploit or kernel patch is part of this project.
 
 ## Components
 
 - `cli/`: Rust CLI named `ios-unsandboxed`; designed for SSH use and future diagnostics/configuration/error handling.
 - `daemon/`: strict C17 executable named `ios-unsandboxedd`; its foreground IPC server handles read-only status and preflight requests.
-- `native/`: reusable C17 read-only preflight, deterministic execution-eligibility policy, and fail-closed persistent-state loader. It has no launch hook, Amethyst adapter, state writer, or execution operation.
-- `packaging/rootful/`: centralized rootful path contract, disabled-state example, and inactive LaunchDaemon template. It is not an installer.
+- `native/`: reusable C17 read-only preflight, deterministic execution-eligibility policy, fail-closed persistent-state loader, and a fixed-path installer helper.
+- `packaging/rootful/`: centralized path contract, disabled-state example, passive plist template, and manager entrypoint. The paired C17 helper handles package verification and filesystem transactions.
 - `docs/architecture/`: component boundaries, target build requirements, security limits, and installation ownership.
 
 The intended future flow and current boundaries are described in [the architecture overview](docs/architecture/overview.md), [the native preflight contract](docs/architecture/preflight-contract.md), [the execution eligibility policy](docs/architecture/execution-policy.md), [service lifecycle](docs/architecture/service-lifecycle.md), [persistent state](docs/architecture/persistent-state.md), and [recovery/rollback](docs/architecture/recovery-rollback.md).
@@ -44,23 +44,26 @@ For host builds and C17 fixture tests:
 - Rust stable with Cargo (minimum Rust 1.74)
 - A C17 compiler (`cc`, Clang, or GCC) with strict warning support
 - `make`
+- Python 3 for packaging and host integration fixtures
 
-For the separate Apple ARM64 iOS build, use macOS with Xcode command line tools, the iPhoneOS SDK, stable Rust, and the `aarch64-apple-ios` Rust target. Rust links with that target and `xcrun` supplies the iPhoneOS SDK to Clang for the C17 daemon; the deployment target is iOS 12.0. No developer-specific SDK paths are assumed. The Makefile reports a clear error when the Apple toolchain or SDK is unavailable. P001 does not sign the resulting binaries for device use; a validated jailbreak trust/signing path is still required before runtime claims can be made.
+For the separate Apple ARM64 iOS build, use macOS with Xcode command line tools, the iPhoneOS SDK, stable Rust, and the `aarch64-apple-ios` Rust target. Rust links with that target and `xcrun` supplies the iPhoneOS SDK to Clang for the C17 daemon and installer helper; the deployment target is iOS 12.0. No developer-specific SDK paths are assumed. The Makefile reports a clear error when the Apple toolchain or SDK is unavailable. The build remains unsigned unless the artifacts already have a signature; P007 records that status without changing it.
 
 ## Build and validation
 
 ```sh
 make help
 make build       # host CLI and host diagnostic daemon
-make test        # Rust, native, IPC, and host smoke checks
+make test        # Rust, native, IPC, packaging, installer fixtures, and host smoke checks
 make native-test # isolated C17 preflight, policy, and peer-auth fixtures
 make state-test  # persistent-state format and safety fixtures
 make ipc-test    # temporary-socket protocol and lifecycle tests
 make packaging-test # passive LaunchDaemon plist syntax and contract
+make installer-test # isolated rootful install/upgrade/rollback/uninstall fixtures
+make package-rootful # macOS-only Apple ARM64 package assembly
 make clean
 ```
 
-`make build-ios` is a separate macOS-only cross-compilation gate for the Apple ARM64 iOS target, with an iOS 12.0 deployment target. It does not run the outputs, install them, sign them for device use, or establish jailbreak compatibility. Device signing/trust handling must be researched and validated in later work.
+`make build-ios` is a separate macOS-only cross-compilation gate for the Apple ARM64 iOS target, with an iOS 12.0 deployment target. `make package-rootful` builds the CLI, daemon, and C17 installer helper, inspects their Mach-O architecture, dependencies, and signing metadata, and emits a deterministic distribution archive. Neither target runs the outputs, signs them for device use, nor establishes jailbreak compatibility.
 
 CI keeps these gates distinct:
 
@@ -91,16 +94,28 @@ ios-unsandboxed logs
 
 The explicit `--test-socket ... check` command exercises PING, the unchanged P004 status request, preflight, and lifecycle status against an isolated test socket. It reports kernel-authenticated peer credentials for physical-device qualification.
 
-`ios-unsandboxedd --probe` exposes the native C17 read-only preflight. PING confirms only that this project IPC endpoint responds; it does not establish Amethyst initialization or operational eligibility. `enable`, `disable`, `sign`, `install`, `inspect`, and `logs` remain unimplemented and fail safely. The root-owned state format accepts only a disabled activation value and P005 provides no writer. The LaunchDaemon plist is passive and is never installed or activated by P005. See [the IPC protocol](docs/architecture/ipc-protocol.md), [daemon security](docs/architecture/daemon-security.md), [IPC lifecycle](docs/architecture/ipc-lifecycle.md), and [device qualification](docs/validation/ios-device-ipc-qualification.md).
+`ios-unsandboxedd --probe` exposes the native C17 read-only preflight. PING confirms only that this project IPC endpoint responds; it does not establish Amethyst initialization or operational eligibility. `enable`, `disable`, `sign`, `install <binary>`, `inspect`, and `logs` remain unimplemented and fail safely. The project manager is separate from `iu install <binary>`: it installs only this project package and cannot prepare a user executable. The root-owned state format accepts only a disabled activation value; only the transaction manager can write the exact schema-v1 record, and it is not exposed through daemon IPC. The LaunchDaemon plist is packaged and staged inactive by P007; it is never registered or activated. See [the IPC protocol](docs/architecture/ipc-protocol.md), [daemon security](docs/architecture/daemon-security.md), [IPC lifecycle](docs/architecture/ipc-lifecycle.md), and [device qualification](docs/validation/ios-device-ipc-qualification.md).
 
 ## Rootful installation contract
 
 P005 documents paths and packages a dormant plist template only; it does not deploy to a device, install an alias, create the canonical state file, load launchd, or ship a complete installer. The canonical constants are in [`packaging/rootful/paths.env`](packaging/rootful/paths.env), and ownership, lifecycle, and rollback requirements are in [the rootful layout](docs/architecture/rootful-layout.md), [service lifecycle](docs/architecture/service-lifecycle.md), and [recovery/rollback](docs/architecture/recovery-rollback.md).
 
-The future installer must use rootful filesystem paths, preserve Procursus conventions, avoid Apple system and Amethyst-owned files, and support verified backup, atomic installation, rollback, and reversible uninstall. The `iu` command must be a filesystem symlink at `/usr/local/bin/iu` pointing to `/usr/local/bin/ios-unsandboxed`; it must not depend on an interactive shell alias.
+P007 provides the rootful package builder and project-owned manager. The manager accepts an expanded package directory and separates read-only planning from mutation with explicit `--apply`:
+
+```sh
+manager.sh plan --package /path/to/ios-unsandboxed-0.1.0-rootful-arm64
+manager.sh install --package /path/to/ios-unsandboxed-0.1.0-rootful-arm64 --apply
+manager.sh status
+manager.sh upgrade --package /path/to/new-rootful-package --apply
+manager.sh rollback --apply
+manager.sh uninstall --apply
+manager.sh recover --apply
+```
+
+Production mutation is limited to effective UID 0 on the reference `iPad4,1` (A1489), iOS 12.5.7, with safe rootful `root:wheel` directories and no foreign destination collisions. Host tests use `--test-root` with an isolated directory and simulated ownership; they are not device evidence. The manager stages the LaunchDaemon plist under private project data and never registers it, invokes `launchctl`, or starts the service. See [rootful installer](docs/architecture/rootful-installer.md), [transactions](docs/architecture/install-transactions.md), [package format](docs/architecture/package-format.md), and [upgrade/rollback](docs/architecture/upgrade-rollback.md).
 
 ## Security and current limitations
 
 P003's C17 policy evaluator accepts only explicit in-memory test configuration and target facts. `ALLOW_ELIGIBLE` means a hypothetical target passes policy checks; it does not mean execution will work. P004 IPC does not remove the iOS sandbox, bypass AMFI, prepare or sign binaries, mutate trust-cache state, enable/disable a service, activate launchd jobs, or intercept process launches. A daemon by itself cannot universally observe or change how iOS processes are launched. No internal Amethyst interface is assumed stable here.
 
-The implementation has not been installed or run on the reference iPad. Socket creation under `/var/run`, Darwin `getpeereid`, root/non-root SSH authorization, Apple A7 IPC, launchd lifecycle, exact installed Amethyst build provenance, hook initialization/inheritance, signing/trust-cache operations, fully unsigned launch, enable/disable, rollback, reboot recovery, and SSH stability remain NOT RUN. Host IPC tests and Apple cross-compilation do not establish device compatibility. The bounded device procedure and evidence ledger are in [the P005 qualification document](docs/validation/ios-device-ipc-qualification.md).
+The implementation and package have not been installed or run on the reference iPad. Socket creation under `/var/run`, Darwin `getpeereid`, root/non-root SSH authorization, Apple A7 IPC, launchd lifecycle, exact installed Amethyst build provenance, hook initialization/inheritance, signing/trust-cache operations, fully unsigned launch, enable/disable, installer ownership, upgrade/rollback, reboot recovery, and SSH stability remain NOT RUN. Host fixtures and Apple cross-compilation do not establish device compatibility. The bounded device procedure and evidence ledger are in [the P005 qualification document](docs/validation/ios-device-ipc-qualification.md).

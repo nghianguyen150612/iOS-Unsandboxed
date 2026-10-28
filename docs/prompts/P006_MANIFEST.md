@@ -68,7 +68,7 @@ The exact required procedures and result fields are in [ios-device-ipc-qualifica
 
 ## P007 readiness
 
-P007 is not ready to start. Complete and review all device rows, retain the independent SSH recovery path, establish installed Amethyst provenance or keep compatibility `UNVERIFIED`, and verify launchd without activating the job before proposing integration. Execution remains disabled.
+The reference-device qualification gates above remain NOT RUN and must not be represented as passed. P007 implementation proceeds code-first with host fixtures and Apple ARM64 CI; physical device access is not a prerequisite for that offline work. P007 does not deploy or activate anything on a device. Keep the independent SSH recovery path, keep Amethyst provenance `UNVERIFIED` until evidence exists, and leave execution disabled. Controlled service registration remains a later lifecycle task after review and device qualification.
 
 ## Git follow-through
 

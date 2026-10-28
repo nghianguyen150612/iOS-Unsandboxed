@@ -4,8 +4,8 @@
 
 set -u
 
-if [ "$#" -ne 2 ]; then
-    printf '%s\n' 'Usage: inspect-ios-build.sh IOS_CLI IOS_DAEMON' >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+    printf '%s\n' 'Usage: inspect-ios-build.sh IOS_CLI IOS_DAEMON [IOS_INSTALLER_HELPER]' >&2
     exit 2
 fi
 
@@ -123,6 +123,9 @@ printf '%s\n' 'P006 Apple ARM64 build inspection (read-only; host-side evidence 
 printf '%s\n' 'No signing, trust-cache, deployment, or device startup operation is performed.'
 inspect_binary "$1"
 inspect_binary "$2"
+if [ "$#" -eq 3 ]; then
+    inspect_binary "$3"
+fi
 
 if [ "$INSPECTION_STATUS" -eq 0 ]; then
     printf '%s\n' 'BUILD_INSPECTION_RESULT: PASS (all inspection tools ran; review recorded output for target facts).'
