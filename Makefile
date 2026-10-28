@@ -13,9 +13,10 @@ IOS_INSTALLER_HELPER := build/ios/installer-helper
 NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c native/src/iu_amethyst_adapter.c native/src/iu_amethyst_capabilities.c
 PLANNER_SOURCE := native/src/iu_execution_planner.c
 LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
+POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -24,6 +25,7 @@ help:
 	  'make service-test Run mocked service lifecycle fixtures' \
 	  'make adapter-test Run read-only Amethyst adapter and Mach-O fixtures' \
 	  'make planner-test Run read-only executable identity planner fixtures' \
+	  'make policy-test  Run policy store and manager fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
@@ -43,7 +45,7 @@ host-build:
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) -Idaemon/include \
 	  daemon/src/main.c daemon/src/ipc_server.c daemon/src/peer_auth.c $(NATIVE_SOURCES) -o $(HOST_DAEMON)
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_INSTALLER_TESTING $(NATIVE_INCLUDES) \
-	  native/src/iu_installer.c native/src/iu_service_state.c $(LIFECYCLE_SOURCE) -o $(HOST_INSTALLER_HELPER)
+	  native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) -o $(HOST_INSTALLER_HELPER)
 
 test: host-build
 	cargo test --locked --workspace
@@ -54,6 +56,7 @@ test: host-build
 	$(MAKE) service-test
 	$(MAKE) adapter-test
 	$(MAKE) planner-test
+	$(MAKE) policy-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -116,6 +119,9 @@ planner-test:
 	    python3 tests/planner/planner-fixtures.py build/host/execution-planner-sanitized-test; \
 	else echo 'Planner sanitizers unavailable; strict C17 fixture run completed.'; fi
 
+policy-test: host-build
+	python3 tests/policy/policy-manager-test.py $(HOST_INSTALLER_HELPER)
+
 check-ios-toolchain:
 	@case "$$(uname -s)" in \
 	  Darwin) ;; \
@@ -135,7 +141,7 @@ build-ios: check-ios-toolchain
 	xcrun --sdk iphoneos clang -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
 	  -target arm64-apple-ios$(IOS_DEPLOYMENT_TARGET) \
 	  -isysroot "$$(xcrun --sdk iphoneos --show-sdk-path)" \
-	  native/src/iu_installer.c native/src/iu_service_state.c $(LIFECYCLE_SOURCE) -o $(IOS_INSTALLER_HELPER)
+	  native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) -o $(IOS_INSTALLER_HELPER)
 
 package-rootful: build-ios
 	python3 scripts/build-rootful-package.sh

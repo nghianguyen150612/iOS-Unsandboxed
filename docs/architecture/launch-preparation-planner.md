@@ -37,3 +37,5 @@ The production planner evaluates P003 using a disabled policy and unverified Ame
 ## P011 prerequisites
 
 P011 may define a separate root-controlled opt-in policy and an authorization-preview contract. It must not promote a P010 artifact plan to execution permission. Before any mutating launch work, the project still needs authoritative installed Amethyst identity, independent runtime hook evidence, a reviewed same-object launch boundary, reviewed root authorization, reference-device runtime evidence, and explicit activation/recovery design.
+
+P011 uses this planner in the root manager's read-only policy preview and checks target identity again. The policy is not activation and the resulting preview is not a launch permit. See [policy authorization preview](policy-authorization-preview.md).

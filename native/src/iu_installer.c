@@ -2,6 +2,8 @@
 #define _GNU_SOURCE 1
 #include "iu_service_state.h"
 #include "iu_service_lifecycle.h"
+#include "iu_policy_store.h"
+#include "iu_policy_manager.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1135,6 +1137,91 @@ static int service_lifecycle_metadata_present(struct context *ctx)
     return 0;
 }
 
+static int policy_compatible(struct context *ctx)
+{
+    struct iu_policy_store s;
+    if(iu_policy_store_load(ctx->datafd,ctx->uid,ctx->gid,&s)!=0 ||
+       (s.state!=IU_STORE_MISSING && s.state!=IU_STORE_VALID))
+        return bad("execution policy is corrupt, unsafe, unsupported, or unreadable; preserved for recovery");
+    return 0;
+}
+static void policy_help(void)
+{
+    puts("policy help|status|plan|list|preview PATH|add-directory PATH|remove-directory PATH|reset\n"
+         "Changes require --apply --confirm; scopes must be under /opt/ios-unsandboxed-scopes/.\n"
+         "All policy decisions are preview-only; operational authorization is always false.");
+}
+static int write_policy_atomic(struct context *ctx,const char *bytes,size_t length,const struct iu_policy_store *original)
+{
+    char name[96]; struct stat before,now,tmpstat; struct iu_policy_store current; int exists,fd; static unsigned counter;
+    exists=fstatat(ctx->datafd,"execution-policy",&before,AT_SYMLINK_NOFOLLOW)==0;
+    if(!exists && errno!=ENOENT)return -1;
+    if((original->state==IU_STORE_VALID)!=exists)return -1;
+    if(snprintf(name,sizeof(name),".policy-tmp-%ld-%u",(long)getpid(),++counter)>=(int)sizeof(name))return -1;
+    fd=openat(ctx->datafd,name,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(fd<0)return -1;
+    if(fchmod(fd,0600)!=0||fchown(fd,ctx->uid,ctx->gid)!=0||write_all(fd,bytes,length)!=0||fsync(fd)!=0||fstat(fd,&tmpstat)!=0||!S_ISREG(tmpstat.st_mode)||tmpstat.st_nlink!=1||!expected_mode(ctx,&tmpstat,0600))goto fail;
+#if defined(IU_INSTALLER_TESTING)
+    if(test_interrupt_at && !strcmp(test_interrupt_at,"policy-before-rename"))_exit(86);
+#endif
+    if(iu_policy_store_load(ctx->datafd,ctx->uid,ctx->gid,&current)!=0||current.state!=original->state||current.count!=original->count)goto fail;
+    for(unsigned i=0;i<current.count;i++)if(strcmp(current.scopes[i],original->scopes[i])||current.devices[i]!=original->devices[i]||current.inodes[i]!=original->inodes[i])goto fail;
+    if(exists){if(fstatat(ctx->datafd,"execution-policy",&now,AT_SYMLINK_NOFOLLOW)!=0||now.st_dev!=before.st_dev||now.st_ino!=before.st_ino||now.st_size!=before.st_size||now.st_mtime!=before.st_mtime||now.st_ctime!=before.st_ctime)goto fail;}
+    else if(fstatat(ctx->datafd,"execution-policy",&now,AT_SYMLINK_NOFOLLOW)==0||errno!=ENOENT)goto fail;
+    if(close(fd)!=0){unlinkat(ctx->datafd,name,0);return -1;}
+    if(renameat(ctx->datafd,name,ctx->datafd,"execution-policy")!=0){int e=errno;unlinkat(ctx->datafd,name,0);errno=e;return -1;}
+    return fsync_dir(ctx->datafd);
+fail:
+    {int e=errno;close(fd);unlinkat(ctx->datafd,name,0);errno=e;return -1;}
+}
+static int cmd_policy(struct context *ctx,const char *action,const char *path,int apply,int confirmed)
+{
+    struct iu_policy_store s, verify, original; struct manifest m; uint64_t dev,ino; char encoded[IU_POLICY_STORE_MAX_BYTES+1U]; size_t length;
+    int change=!strcmp(action,"add-directory")||!strcmp(action,"remove-directory")||!strcmp(action,"reset");
+    if(change && apply && !confirmed)return bad("policy mutation requires both --apply and --confirm");
+    if(change && confirmed && !apply)return bad("--confirm requires --apply");
+    if(change && apply){
+        if(check_production_platform(ctx)!=0||check_production_permissions(ctx)!=0)return 2;
+        if(acquire_lock(ctx)!=0)return 4;
+        if(check_no_transaction(ctx)!=0)return 3;
+        if(check_existing_install(ctx,&m)!=0)return bad("policy mutation requires a verified installation and disabled state");
+    }
+    if(iu_policy_store_load(ctx->datafd,ctx->uid,ctx->gid,&s)!=0)return bad("could not inspect policy");
+    printf("Policy file: %s\nSchema version: %u\nMode: %s\nScopes: %u\nIntegrity: %s\nExecution activation: disabled\nDevice runtime verified: false\nOperational authorization: false\n",iu_policy_store_state_name(s.state),s.schema,(s.state==IU_STORE_VALID||s.state==IU_STORE_MISSING)?"preview-only":"unavailable",(s.state==IU_STORE_VALID)?s.count:0,s.state==IU_STORE_VALID?"verified":s.state==IU_STORE_MISSING?"no policy file":"failed");
+    if(s.state!=IU_STORE_VALID && s.state!=IU_STORE_MISSING)return bad("policy cannot be used or replaced; preserve it for manual recovery");
+    if(!strcmp(action,"status")||!strcmp(action,"plan")||!strcmp(action,"list")){
+        if(strcmp(action,"status"))for(unsigned i=0;i<s.count;i++)printf("Scope: %s (%s)\n",s.scopes[i],iu_policy_scope_inspect(ctx->rootfd,s.scopes[i],ctx->uid,ctx->gid,NULL,&dev,&ino,0)==0 && dev==s.devices[i] && ino==s.inodes[i]?"safe":"UNSAFE_DIRECTORY");
+        return 0;
+    }
+    if(!strcmp(action,"preview"))return iu_policy_preview(&s,ctx->rootfd,ctx->root,ctx->fixture,ctx->uid,ctx->gid,path);
+    original=s;
+    if(!strcmp(action,"add-directory")){
+        unsigned pos=0;
+        if(iu_policy_scope_inspect(ctx->rootfd,path,ctx->uid,ctx->gid,NULL,&dev,&ino,0)!=0)return bad("directory is not an eligible canonical root-owned scope or has unsafe parents");
+        while(pos<s.count && strcmp(s.scopes[pos],path)<0)pos++;
+        if(pos<s.count && !strcmp(s.scopes[pos],path)){if(s.devices[pos]!=dev||s.inodes[pos]!=ino)return bad("configured directory identity changed");puts("Scope already configured; no change.");return 0;}
+        if(s.count>=IU_POLICY_MAX_DIRECTORIES)return bad("scope limit reached");
+        if(iu_policy_scope_inspect(ctx->rootfd,path,ctx->uid,ctx->gid,NULL,&dev,&ino,1)!=0)return bad("a new scope must be empty at registration");
+        for(unsigned i=s.count;i>pos;i--){strcpy(s.scopes[i],s.scopes[i-1]);s.devices[i]=s.devices[i-1];s.inodes[i]=s.inodes[i-1];}
+        strcpy(s.scopes[pos],path);s.devices[pos]=dev;s.inodes[pos]=ino;s.count++;
+    }else if(!strcmp(action,"remove-directory")){
+        unsigned pos=0;while(pos<s.count && strcmp(s.scopes[pos],path))pos++;
+        if(pos==s.count)return bad("exact directory scope is not configured");
+        for(unsigned i=pos;i+1<s.count;i++){strcpy(s.scopes[i],s.scopes[i+1]);s.devices[i]=s.devices[i+1];s.inodes[i]=s.inodes[i+1];}
+        s.count--;
+    }else if(!strcmp(action,"reset"))s.count=0;
+    else return 2;
+    if(iu_policy_store_encode(&s,encoded,sizeof(encoded),&length)!=0)return bad("invalid, duplicate, overlapping, or excessive scopes");
+    for(unsigned i=0;i<s.count;i++)if(iu_policy_scope_inspect(ctx->rootfd,s.scopes[i],ctx->uid,ctx->gid,NULL,&dev,&ino,0)!=0 || dev!=s.devices[i] || ino!=s.inodes[i])return bad("configured scope is unsafe or replaced; no policy change");
+    if(!apply){puts("Policy plan only; no changes. Use --apply --confirm to commit.");return 0;}
+#if defined(IU_INSTALLER_TESTING)
+    if(test_interrupt_at && !strcmp(test_interrupt_at,"policy-before-write"))_exit(86);
+#endif
+    if(write_policy_atomic(ctx,encoded,length,&original)!=0)return bad("policy write failed; prior file or a complete new file is preserved");
+    if(iu_policy_store_load(ctx->datafd,ctx->uid,ctx->gid,&verify)!=0||verify.state!=IU_STORE_VALID||verify.count!=s.count)return bad("written policy did not verify; inspect before further changes");
+    for(unsigned i=0;i<s.count;i++)if(strcmp(verify.scopes[i],s.scopes[i])||verify.devices[i]!=s.devices[i]||verify.inodes[i]!=s.inodes[i])return bad("written policy does not match the requested configuration");
+    puts("Policy updated atomically; execution remains disabled.");return 0;
+}
+
 static int cmd_status(struct context *ctx)
 {
     struct manifest m;struct transaction t;int current=check_existing_install(ctx,&m);int txn=load_transaction(ctx,&t);int active;
@@ -1155,6 +1242,7 @@ static int cmd_maintenance_plan(struct context *ctx,const char *command)
     service_metadata=service_lifecycle_metadata_present(ctx);if(service_metadata<0)return bad("service lifecycle metadata cannot be inspected safely");
     active=active_plist_present(ctx);if(active<0)return bad("active LaunchDaemon path cannot be inspected safely");
     if(strcmp(command,"rollback")==0){struct manifest previous;int backupfd=-1;
+        if(policy_compatible(ctx)!=0)return 3;
         if(active||service_metadata)return bad("stop and unregister the project service before rollback");
         if(strcmp(current.backup_generation,"none")==0)return bad("no verified rollback generation is recorded");
         if(load_backup(ctx,current.backup_generation,&previous,&backupfd)!=0)return bad("rollback backup is missing or corrupt");
@@ -1168,7 +1256,7 @@ static int cmd_plan(struct context *ctx,const char *action,const char *package_p
 {
     struct package pkg;struct manifest current;int existing=check_existing_install(ctx,&current);
     if(check_no_transaction(ctx)!=0)return 3;
-    if(strcmp(action,"upgrade")==0){int active=active_plist_present(ctx),metadata=service_lifecycle_metadata_present(ctx);if(active<0||metadata<0)return bad("service lifecycle ownership state cannot be inspected safely");if(active||metadata)return bad("unregister the project service before upgrading its daemon binary");}
+    if(strcmp(action,"upgrade")==0){int active=active_plist_present(ctx),metadata=service_lifecycle_metadata_present(ctx);if(policy_compatible(ctx)!=0)return 3;if(active<0||metadata<0)return bad("service lifecycle ownership state cannot be inspected safely");if(active||metadata)return bad("unregister the project service before upgrading its daemon binary");}
     if(existing<0)return bad("current installation is modified, foreign, or unsupported");
     if(verify_package_directory(ctx,package_path,&pkg)!=0)return bad("package is missing, malformed, has a bad checksum, or is not an iOS ARM64 package");
     if(strcmp(action,"install")==0){if(existing==0){close(pkg.dirfd);return bad("installation already exists; use upgrade");}if(check_destination_conflicts(ctx)!=0){close(pkg.dirfd);return 3;}
@@ -1193,7 +1281,7 @@ static int cmd_install_or_upgrade(struct context *ctx,const char *action,const c
     existing=check_existing_install(ctx,&current);
     if(existing<0)return bad("current installation is modified, foreign, or unsupported");
     if(strcmp(action,"install")==0){if(existing==0)return bad("installation already exists; use upgrade");if(check_destination_conflicts(ctx)!=0)return 3;}
-    else {int active=active_plist_present(ctx),metadata=service_lifecycle_metadata_present(ctx);if(active<0||metadata<0)return bad("service lifecycle ownership state cannot be inspected safely");if(active||metadata)return bad("unregister the project service before upgrading its daemon binary");if(existing!=0)return bad("upgrade requires a verified schema-v1 installation");}
+    else {int active=active_plist_present(ctx),metadata=service_lifecycle_metadata_present(ctx);if(policy_compatible(ctx)!=0)return 3;if(active<0||metadata<0)return bad("service lifecycle ownership state cannot be inspected safely");if(active||metadata)return bad("unregister the project service before upgrading its daemon binary");if(existing!=0)return bad("upgrade requires a verified schema-v1 installation");}
     if(verify_package_directory(ctx,package_path,&pkg)!=0)return bad("package validation failed (integrity, metadata, ownership, Mach-O architecture, or plist contract)");
     if(existing==0&&version_cmp(pkg.version,current.project_version)<=0){close(pkg.dirfd);return bad("upgrade package version must be newer than installed version");}
     if(ensure_project_data(ctx)!=0){close(pkg.dirfd);return bad("could not create a private project data directory");}
@@ -1226,6 +1314,7 @@ static int cmd_rollback(struct context *ctx)
     if(acquire_lock(ctx)!=0)return 4;
     if(check_no_transaction(ctx)!=0)return 3;
     if(check_existing_install(ctx,&current)!=0)return bad("rollback requires a fully verified current installation");
+    if(policy_compatible(ctx)!=0)return 3;
     {int active=active_plist_present(ctx),metadata=service_lifecycle_metadata_present(ctx);if(active<0||metadata<0)return bad("service lifecycle ownership state cannot be inspected safely");if(active||metadata)return bad("stop and unregister the project service before rollback");}
     if(strcmp(current.backup_generation,"none")==0)return bad("no verified rollback generation is recorded");
     if(load_backup(ctx,current.backup_generation,&backup,&backupfd)!=0)return bad("rollback backup is missing, corrupt, incomplete, or has unexpected ownership/mode");
@@ -1278,6 +1367,7 @@ static int cmd_uninstall(struct context *ctx)
     if(existing==1){printf("No verified installation manifest is present; leaving all remaining files untouched.\n");return 0;}
     if(existing!=0)return bad("uninstall requires every project-owned file and disabled state to verify");
     {int active=active_plist_present(ctx),metadata=service_lifecycle_metadata_present(ctx);if(active<0||metadata<0)return bad("service lifecycle ownership state cannot be inspected safely");if(active||metadata)return bad("stop and unregister the project service before uninstall");}
+    {struct iu_policy_store ps; iu_policy_store_load(ctx->datafd,ctx->uid,ctx->gid,&ps); if(ps.state!=IU_STORE_MISSING)printf("Execution policy (%s) will be preserved for administrator review.\n",iu_policy_store_state_name(ps.state));}
     if(create_transaction_backup(ctx,&current,recovery)!=0)return bad("could not preserve a verified uninstall recovery generation");
     memset(&transaction,0,sizeof(transaction));strcpy(transaction.action,"uninstall");strcpy(transaction.recovery_generation,recovery);strcpy(transaction.target_generation,"none");strcpy(transaction.staging_generation,"none");strcpy(transaction.package_generation,current.package_generation);strcpy(transaction.phase,"prepared");
     if(write_transaction(ctx,&transaction)!=0)return bad("could not persist uninstall journal");
@@ -1297,13 +1387,13 @@ static int cmd_uninstall(struct context *ctx)
     return 0;
 }
 
-static int parse_arguments(int argc,char **argv,const char **command,const char **service_action,const char **package_path,const char **test_root,int *apply,int *confirmed,int *acknowledge)
+static int parse_arguments(int argc,char **argv,const char **command,const char **service_action,const char **package_path,const char **test_root,const char **policy_path,int *apply,int *confirmed,int *acknowledge)
 {
-    *command=NULL;*service_action=NULL;*package_path=NULL;*test_root=NULL;*apply=0;*confirmed=0;*acknowledge=0;
+    *command=NULL;*service_action=NULL;*package_path=NULL;*test_root=NULL;*policy_path=NULL;*apply=0;*confirmed=0;*acknowledge=0;
     if(argc<2)return -1;
     *command=argv[1];
     int first=2;
-    if(strcmp(*command,"service")==0){if(argc<3)return -1;*service_action=argv[2];first=3;}
+    if(strcmp(*command,"service")==0||strcmp(*command,"policy")==0){if(argc<3)return -1;*service_action=argv[2];first=3;}
     for(int i=first;i<argc;++i){
         if(strcmp(argv[i],"--apply")==0){if(*apply)return -1;*apply=1;continue;}
         if(strcmp(argv[i],"--confirm")==0){if(*confirmed)return -1;*confirmed=1;continue;}
@@ -1313,6 +1403,7 @@ static int parse_arguments(int argc,char **argv,const char **command,const char 
 #if defined(IU_INSTALLER_TESTING)
         if(strcmp(argv[i],"--test-interrupt-at")==0&&i+1<argc){if(test_interrupt_at)return -1;test_interrupt_at=argv[++i];continue;}
 #endif
+        if(strcmp(*command,"policy")==0 && argv[i][0]!='-' && !*policy_path){*policy_path=argv[i];continue;}
         return -1;
     }
     return 0;
@@ -1353,6 +1444,7 @@ static void print_help(void)
          "  rollback   Restore the last verified backup; changes require --apply\n"
          "  uninstall  Remove only verified project-owned files; requires --apply\n"
          "  recover    Restore the journal's verified pre-transaction generation\n\n"
+         "  policy help|status|plan|list|add-directory|remove-directory|reset|preview\n"
          "  service plan|status|register|start|stop|unregister|recover\n"
          "             Read-only by default; changes require --apply --confirm\n"
          "             register also requires --acknowledge-run-at-load\n\n"
@@ -1362,20 +1454,28 @@ static void print_help(void)
 }
 int main(int argc,char **argv)
 {
-    const char *command,*service_action,*package_path,*test_root;int apply,confirmed,acknowledge,result=0,mutating=0,need_package=0,require_root=1;struct context ctx;
-    if(parse_arguments(argc,argv,&command,&service_action,&package_path,&test_root,&apply,&confirmed,&acknowledge)!=0){print_help();return 2;}
-    if(strcmp(command,"service")!=0&&(confirmed||acknowledge)){fail("service confirmation flags are valid only for service commands");return 2;}
+    const char *command,*service_action,*package_path,*test_root,*policy_path;int apply,confirmed,acknowledge,result=0,mutating=0,need_package=0,require_root=1;struct context ctx;
+    if(parse_arguments(argc,argv,&command,&service_action,&package_path,&test_root,&policy_path,&apply,&confirmed,&acknowledge)!=0){print_help();return 2;}
+    if(strcmp(command,"service")!=0&&strcmp(command,"policy")!=0&&(confirmed||acknowledge)){fail("service confirmation flags are valid only for service commands");return 2;}
 #if defined(IU_INSTALLER_TESTING)
     if(test_interrupt_at!=NULL){
         if(test_root==NULL||!apply){fail("test interruption requires an explicit --test-root and --apply");return 2;}
-        if(strcmp(test_interrupt_at,"staging")&&strcmp(test_interrupt_at,"prepared")&&strncmp(test_interrupt_at,"commit:",7)&&strncmp(test_interrupt_at,"rollback:",9)){fail("unknown test interruption phase");return 2;}
+        if(strcmp(test_interrupt_at,"staging")&&strcmp(test_interrupt_at,"prepared")&&strcmp(test_interrupt_at,"policy-before-write")&&strcmp(test_interrupt_at,"policy-before-rename")&&strncmp(test_interrupt_at,"commit:",7)&&strncmp(test_interrupt_at,"rollback:",9)){fail("unknown test interruption phase");return 2;}
     }
 #endif
     if(strcmp(command,"help")==0){if(argc!=2)return 2;print_help();return 0;}
     if(strcmp(command,"version")==0){if(argc!=2)return 2;puts("iOS-Unsandboxed 0.1.0\ninstaller manager format 1\npackage format 1\ninstall manifest schema 1\nstate schema 1 (execution_activation=disabled)");return 0;}
+    if(!strcmp(command,"policy") && !strcmp(service_action,"help")){if(argc!=3)return 2;policy_help();return 0;}
     if(strcmp(command,"plan")==0){if(!package_path||apply){fail("plan requires --package and is always read-only");return 2;}need_package=1;}
     else if(strcmp(command,"install")==0||strcmp(command,"upgrade")==0){if(!package_path){fail("install and upgrade require --package DIR");return 2;}need_package=1;mutating=apply;}
     else if(strcmp(command,"status")==0){if(package_path||apply)return 2;}
+    else if(strcmp(command,"policy")==0){int needs_path=!strcmp(service_action,"add-directory")||!strcmp(service_action,"remove-directory")||!strcmp(service_action,"preview");
+        int changes=!strcmp(service_action,"add-directory")||!strcmp(service_action,"remove-directory")||!strcmp(service_action,"reset");
+        if(package_path||acknowledge||(!needs_path && policy_path)||(needs_path && !policy_path))return 2;
+        if(!changes && strcmp(service_action,"status")&&strcmp(service_action,"plan")&&strcmp(service_action,"list")&&strcmp(service_action,"preview"))return 2;
+        if(!changes&&(apply||confirmed))return 2;
+        mutating=changes&&apply;require_root=mutating;
+    }
     else if(strcmp(command,"service")==0){if(package_path||!service_action)return 2;
         if(!strcmp(service_action,"plan")||!strcmp(service_action,"status")){if(apply||confirmed||acknowledge)return 2;}
         else if(!strcmp(service_action,"register")||!strcmp(service_action,"start")||!strcmp(service_action,"stop")||!strcmp(service_action,"unregister")||!strcmp(service_action,"recover")){mutating=apply;if(acknowledge&&strcmp(service_action,"register")!=0)return 2;}
@@ -1386,6 +1486,7 @@ int main(int argc,char **argv)
     if(init_context(&ctx,test_root,require_root)!=0)return 2;
     if(strcmp(command,"plan")==0){struct manifest m;int installed=check_existing_install(&ctx,&m);if(installed<0)result=bad("current installation is modified, foreign, or unsupported");else result=cmd_plan(&ctx,installed==0?"upgrade":"install",package_path);}
     else if(strcmp(command,"status")==0)result=cmd_status(&ctx);
+    else if(strcmp(command,"policy")==0)result=cmd_policy(&ctx,service_action,policy_path,apply,confirmed);
     else if(strcmp(command,"service")==0){enum iu_service_action action;struct manifest manifest;int installed=check_existing_install(&ctx,&manifest);int daemon_valid=0,template_valid=0;
         if(strcmp(service_action,"plan")==0)action=IU_SERVICE_PLAN;else if(strcmp(service_action,"status")==0)action=IU_SERVICE_STATUS;
         else if(strcmp(service_action,"register")==0)action=IU_SERVICE_REGISTER;else if(strcmp(service_action,"start")==0)action=IU_SERVICE_START;

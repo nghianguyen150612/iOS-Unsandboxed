@@ -33,3 +33,5 @@ The manager reports a journal in `status` and refuses another install or upgrade
 ## Durability limits
 
 Regular files and metadata are synchronized before rename. The helper synchronizes containing directories where the filesystem supports it. Some Darwin/iOS filesystems may reject directory `fsync` with `EINVAL` or `ENOTSUP`; the helper tolerates only those unsupported-operation errors. Device behavior for the reference iOS filesystem remains NOT RUN. This portable POSIX design does not claim crash atomicity across mounts, power-loss guarantees beyond the journaled sequence, or protection against a malicious concurrent root process.
+
+P011 policy mutations use this same transaction lock but a separate same-directory atomic replacement, not the package journal. See [policy storage](policy-storage-contract.md). Upgrades reject unsupported or unsafe policy and preserve valid bytes.
