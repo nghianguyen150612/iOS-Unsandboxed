@@ -65,7 +65,23 @@ with tempfile.TemporaryDirectory(prefix="iu-policy-") as td:
     binary.write_bytes(planner.macho())
     binary.chmod(0o755)
     result = run("preview", "/opt/ios-unsandboxed-scopes/one/tool")
-    assert "HYPOTHETICALLY_ELIGIBLE" in result and "Operational authorization: false" in result and "DENY_DISABLED" in result and "P009 capability" in result, result
+    assert "ARTIFACT_PROVENANCE_UNVERIFIED" in result and "Operational authorization: false" in result and "DENY_DISABLED" in result and "P009 capability" in result, result
+    assert "P003 simulated directory scope result (NOT artifact eligibility): ALLOW_ELIGIBLE" in result
+    assert "HYPOTHETICALLY_ELIGIBLE" not in result, result
+    # A structurally valid Mach-O copied after scope enrollment has no trusted
+    # evidence of origin. This simulates the protected Apple-service copy risk
+    # without using or claiming to identify a real Apple binary.
+    fake_system_source = base / "fixture-system-service"
+    fake_system_source.write_bytes(planner.macho())
+    copied_system_tool = scopes / "one/copied-system-service"
+    copied_system_tool.write_bytes(fake_system_source.read_bytes())
+    copied_system_tool.chmod(0o755)
+    copied_result = run("preview", "/opt/ios-unsandboxed-scopes/one/copied-system-service")
+    assert "ARTIFACT_PROVENANCE_UNVERIFIED" in copied_result, copied_result
+    assert "Operational authorization: false" in copied_result, copied_result
+    assert "HYPOTHETICALLY_ELIGIBLE" not in copied_result, copied_result
+    assert copied_system_tool.read_bytes() == fake_system_source.read_bytes()
+    copied_system_tool.unlink()
     assert "OUTSIDE_ALLOWED_SCOPE" in run("preview", "/opt/ios-unsandboxed-scopes/two/tool")
     binary.write_bytes(planner.macho(signature="none"))
     assert "MISSING_SIGNATURE_COMMAND" in run("preview", "/opt/ios-unsandboxed-scopes/one/tool")
