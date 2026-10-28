@@ -270,8 +270,10 @@ def main() -> int:
 
         # Package upgrades remain passive.
         ok(run(suite, "unregister", apply=True, confirm=True), "cleanup concurrent registration")
+        launchd_calls_before_upgrade = mock_calls.read_bytes()
         suite.ok(suite.invoke("upgrade", suite.package_new, apply=True), "fixture upgrade")
         assert not active.exists(), "package upgrade activated a LaunchDaemon plist"
+        assert mock_calls.read_bytes() == launchd_calls_before_upgrade, "package upgrade invoked launchctl"
         assert (suite.root / "var/lib/ios-unsandboxed/install-state").read_bytes() == STATE
         print("service lifecycle fixtures: PASS (isolated launchctl mock; no physical-device evidence)")
     return 0
