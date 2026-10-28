@@ -146,6 +146,12 @@ def main() -> int:
         assert "Startup/signing eligibility: UNKNOWN" in status.stdout
         ok(run(suite, "status"), "idempotent service status")
         fails(suite.invoke("upgrade", suite.package_new, apply=True), "upgrade while service registered")
+        active_bytes = active.read_bytes()
+        active.unlink()
+        fails(suite.invoke("upgrade", suite.package_new, apply=True), "upgrade blocked by service record without active plist")
+        fails(suite.invoke("uninstall"), "uninstall blocked by service record without active plist")
+        active.write_bytes(active_bytes)
+        active.chmod(0o644)
 
         ok(run(suite, "register", apply=True, confirm=True, ack=True), "idempotent duplicate registration")
         socket_path = suite.root / "var/run/ios-unsandboxedd.sock"
@@ -263,7 +269,7 @@ def main() -> int:
         assert first.returncode != 0 or second.returncode != 0, "concurrent mutations both passed the exclusive lock"
 
         # Package upgrades remain passive.
-        active.unlink()
+        ok(run(suite, "unregister", apply=True, confirm=True), "cleanup concurrent registration")
         suite.ok(suite.invoke("upgrade", suite.package_new, apply=True), "fixture upgrade")
         assert not active.exists(), "package upgrade activated a LaunchDaemon plist"
         assert (suite.root / "var/lib/ios-unsandboxed/install-state").read_bytes() == STATE

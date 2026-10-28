@@ -39,7 +39,7 @@ manager.sh service recover --apply --confirm
 
 Production mutation requires effective UID 0, an identifiable `iPad4,4` (A1489), iOS 12.5.7, the expected rootful Procursus paths, `root:wheel` ownership, and safe non-group/world-writable parent directories. A package's payload paths, file types, modes, SHA-256 values, and Mach-O ARM64/iOS 12.0 headers are checked before staging. There is no force option. If the device cannot be identified or a destination is occupied by a foreign file, mutation fails.
 
-Service-changing commands require both `--apply` and `--confirm`. Registration also requires `--acknowledge-run-at-load` because the unchanged plist has `RunAtLoad=true` and may start the daemon as a side effect of `launchctl load`. Package install and upgrade remain passive; upgrade is blocked while the active project service plist exists. P008's launchctl command spelling is implemented as the legacy `load`, `unload`, `start`, `stop`, and `list` family, but acceptance on iOS 12.5.7 is **NOT RUN**; unsupported or ambiguous launchctl state fails closed.
+Service-changing commands require both `--apply` and `--confirm`. Registration also requires `--acknowledge-run-at-load` because the unchanged plist has `RunAtLoad=true` and may start the daemon as a side effect of `launchctl load`. Package install and upgrade remain passive; upgrade, rollback, and uninstall are blocked while the active plist or P008 service record/journal exists. P008's launchctl command spelling is implemented as the legacy `load`, `unload`, `start`, `stop`, and `list` family, but acceptance on iOS 12.5.7 is **NOT RUN**; unsupported or ambiguous launchctl state fails closed.
 
 ### Host fixture mode
 
