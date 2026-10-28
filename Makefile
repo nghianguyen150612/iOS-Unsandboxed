@@ -12,11 +12,12 @@ IOS_DAEMON := build/ios/ios-unsandboxedd
 IOS_INSTALLER_HELPER := build/ios/installer-helper
 NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c native/src/iu_amethyst_adapter.c native/src/iu_amethyst_capabilities.c
 PLANNER_SOURCE := native/src/iu_execution_planner.c
+P012_SOURCES := native/src/iu_artifact_provenance.c native/src/iu_launch_binding.c native/src/iu_policy_store.c
 LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -26,6 +27,8 @@ help:
 	  'make adapter-test Run read-only Amethyst adapter and Mach-O fixtures' \
 	  'make planner-test Run read-only executable identity planner fixtures' \
 	  'make policy-test  Run policy store and manager fixtures' \
+	  'make provenance-test Run evidence and trust-boundary fixtures' \
+	  'make launch-binding-test Run identity and scope fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
@@ -57,6 +60,8 @@ test: host-build
 	$(MAKE) adapter-test
 	$(MAKE) planner-test
 	$(MAKE) policy-test
+	$(MAKE) provenance-test
+	$(MAKE) launch-binding-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -149,3 +154,19 @@ package-rootful: build-ios
 clean:
 	cargo clean
 	rm -rf build
+
+provenance-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_PROVENANCE_TESTING $(NATIVE_INCLUDES) tests/provenance/provenance-test.c tests/provenance/mock_verifier.c native/src/iu_artifact_provenance.c $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/provenance-test
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/provenance/provenance-test.c native/src/iu_artifact_provenance.c $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/provenance-production-test
+	python3 tests/launch-binding/fixtures.py build/host/provenance-test build/host/provenance-production-test
+	@if nm build/host/provenance-production-test | grep -q iu_provenance_test_verify; then echo 'test verifier leaked into production' >&2; exit 1; fi
+	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_PROVENANCE_TESTING $(NATIVE_INCLUDES) tests/provenance/provenance-test.c tests/provenance/mock_verifier.c native/src/iu_artifact_provenance.c $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/provenance-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/launch-binding/fixtures.py build/host/provenance-sanitized-test; else echo 'Provenance sanitizers unavailable'; fi
+
+launch-binding-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_LAUNCH_BINDING_TESTING $(NATIVE_INCLUDES) tests/launch-binding/launch-binding-test.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/launch-binding-test
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_LAUNCH_BINDING_TESTING -DIU_PROVENANCE_TESTING $(NATIVE_INCLUDES) tests/launch-binding/scope-test.c tests/provenance/mock_verifier.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/launch-scope-test
+	python3 tests/launch-binding/fixtures.py build/host/launch-scope-test build/host/launch-binding-test
+	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_LAUNCH_BINDING_TESTING $(NATIVE_INCLUDES) tests/launch-binding/launch-binding-test.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/launch-binding-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/launch-binding/fixtures.py build/host/launch-binding-sanitized-test; else echo 'Launch binding sanitizers unavailable'; fi
+	@if [ -x target/debug/ios-unsandboxed ]; then python3 tests/launch-binding/cli-test.py; if nm target/debug/ios-unsandboxed | grep -q iu_provenance_test_verify; then echo 'test verifier leaked into CLI' >&2; exit 1; fi; fi

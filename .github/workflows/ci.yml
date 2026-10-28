@@ -3,7 +3,7 @@ name: CI
 on:
   push:
   pull_request:
-    branches: [main]
+    branches: [main, feat/p011-root-execution-policy]
 
 jobs:
   host-validation:
@@ -19,7 +19,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run Rust static analysis
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Run Rust, native, policy, planner, IPC, packaging, installer fixtures, and host smoke tests
+      - name: Run Rust, native, provenance, launch binding, policy, IPC, packaging, installer, and smoke tests
         run: make test
 
   ios-cross-compile:

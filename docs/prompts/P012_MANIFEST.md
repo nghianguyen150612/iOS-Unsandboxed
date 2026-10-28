@@ -1,0 +1,5 @@
+# P012 manifest
+
+P012 adds bounded provenance ABI v1, a fail-closed trust boundary, descriptor-bound preview and revalidation ABI v1, local `iu plan`, mock-only fixtures, host/CI gates and threat-model documentation. P003's numeric outcomes, P005 state, P007 ownership manifest, P008 service lifecycle, P009 adapter and its source pin, P010 identity inspection, and P011 preview-only scope store remain in place. No daemon IPC or privileged launcher is added. Execution activation remains disabled and operational authorization false.
+
+Production has no authenticated artifact reference, no signature provider and no complete Apple binary catalog. P013 must separately resolve provenance trust roots and protected-origin coverage, trusted installed Amethyst identity, independent hook and SSH evidence, device-tested execution semantics, exact-object launch binding, scoped activation and recovery, and explicit runtime-mutation authorization. P012 supplies no permission to perform those operations. Physical device validation is not part of offline completion.

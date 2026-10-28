@@ -19,3 +19,5 @@ This is a second read-only observation. Another process can replace or modify th
 ## Host coverage and limitations
 
 `make planner-test` uses isolated temporary fixtures and no root or device. It covers symlinks, hard links, directory targets, invalid paths and ABI records, metadata and content changes, replacement inodes, complete-read digest output, synthetic ARM64 and malformed Mach-O data, and unchanged operational authorization. Tests demonstrate finite fixture behavior; they are not an exhaustive proof of parser safety or a race-free launch primitive.
+
+P012 compares this identity with the caller-owned descriptor and rechecks path, content, evidence and scope snapshots. It does not bind a future exec operation; see [launch-boundary threat model](launch-boundary-threat-model.md).

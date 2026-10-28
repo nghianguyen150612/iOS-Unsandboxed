@@ -127,3 +127,5 @@ The implementation and package have not been installed or run on the reference i
 ### Root-controlled policy preview
 
 The rootful manager supports `policy status`, `plan`, `list`, `preview PATH`, `add-directory PATH`, `remove-directory PATH`, and `reset`. Configuration changes require `--apply --confirm`; scopes are limited to initially empty administrator-owned directories under `/opt/ios-unsandboxed-scopes/`. The separate policy is preview-only: execution remains disabled and no preview authorizes a launch. See [root execution policy](docs/architecture/root-execution-policy.md). Physical-device validation remains **NOT RUN**.
+
+P012 adds the local read-only `iu plan PATH` preview. It records identity, reports scope and provenance separately, and never grants launch authorization. See [artifact provenance](docs/architecture/artifact-provenance.md) and [launch binding](docs/architecture/launch-binding-contract.md).

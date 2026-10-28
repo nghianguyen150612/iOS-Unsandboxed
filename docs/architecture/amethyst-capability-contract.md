@@ -30,3 +30,5 @@ Classifications are `SOURCE_CONFIRMED`, `RUNTIME_VERIFIED`, `UNVERIFIED`, `UNSUP
 The pinned source revision `61ce86d7d3f00e5395f4d42bebda0e5dce04946a` (tag `v1.1`) proves only what was inspected in that source. A package version proves only the package manager's reported version. Filesystem metadata proves only what was observed at a path. A SHA-256 value is useful as binary identity only when compared with a trusted reference artifact; P009 has no such reference hash. An independent device observation is required to claim runtime hook state.
 
 The capability result is descriptive. P003 remains the hypothetical eligibility policy, and P009 does not grant operational authorization. The preview output includes `operational_authorization=0`; a source-confirmed record cannot override disabled policy, unverified backend, unsafe file, protected path, ownership mismatch, descriptor identity mismatch, or unsupported architecture.
+
+P012 consumes these capability classifications as read-only prerequisites; unknown runtime evidence does not become verified through a provenance or scope match. See [trust model](provenance-trust-model.md).

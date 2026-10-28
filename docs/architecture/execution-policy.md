@@ -66,3 +66,5 @@ P010's local planner passes descriptor-derived target facts to this evaluator an
 No user-data directory is enabled by P003. No persistent policy is loaded. No command can use the evaluator to launch, sign, trust, modify, install, or unsandbox an executable.
 
 P011 adds a root-controlled preview-only store. The production P003 context remains disabled; an explicit temporary simulation checks scopes without producing execution authorization. See [root execution policy](root-execution-policy.md).
+
+P012 keeps P003 authoritative and operationally disabled. A hypothetical P003 scope result is not provenance or launch authorization; see [launch binding](launch-binding-contract.md).
