@@ -316,7 +316,7 @@ fn safe_read(
         .read(true)
         .custom_flags(OPEN_SAFE_FLAGS)
         .open(path)
-        .map_err(|e| format!("cannot open {}: {e}", path.display()))?; // O_NOFOLLOW | O_CLOEXEC
+        .map_err(|e| format!("cannot open evidence file: {e}"))?; // O_NOFOLLOW | O_CLOEXEC
     let before = file.metadata().map_err(|e| e.to_string())?;
     if !before.is_file()
         || uid.is_some_and(|u| before.uid() != u)
