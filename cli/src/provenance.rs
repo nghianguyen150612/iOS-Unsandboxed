@@ -479,6 +479,7 @@ fn verify_manifest(
     let mut message = Vec::with_capacity(SIGNING_DOMAIN.len() + m.signed.len());
     message.extend_from_slice(SIGNING_DOMAIN);
     message.extend_from_slice(&m.signed);
+    report.signature_validity = "INVALID";
     if key.verify_strict(&message, &signature).is_err() {
         report.error = Some("Ed25519 signature verification failed".into());
         return report;
@@ -633,10 +634,16 @@ mod tests {
     #[test]
     fn altered_manifest_and_artifact_fail_closed() {
         let (mut bytes, identity, store) = fixture();
-        let index = bytes.iter().position(|b| *b == b'\n').unwrap() + 1;
+        let marker = b"artifact_id=fixture-bin";
+        let index = bytes
+            .windows(marker.len())
+            .position(|w| w == marker)
+            .unwrap()
+            + b"artifact_id=".len();
         bytes[index] = if bytes[index] == b'a' { b'b' } else { b'a' };
         let report = verify_manifest(&bytes, &identity, Ok(store.clone()));
-        assert_ne!(report.signature_validity, "VALID");
+        assert!(report.document_integrity);
+        assert_eq!(report.signature_validity, "INVALID");
         let (bytes, mut identity, store) = fixture();
         identity.sha256[0] ^= 1;
         let report = verify_manifest(&bytes, &identity, Ok(store));
@@ -680,5 +687,34 @@ mod tests {
         assert!(parse_manifest(unsupported.as_bytes()).is_err());
         let truncated = String::from_utf8(bytes).unwrap();
         assert!(parse_manifest(&truncated.as_bytes()[..truncated.len() - 3]).is_err());
+    }
+
+    #[test]
+    fn manifest_reader_rejects_symlinks_and_hard_links() {
+        use std::os::unix::fs::symlink;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("iu-p013-{}-{suffix}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let target = root.join("manifest");
+        let link = root.join("symlink");
+        let hard = root.join("hardlink");
+        std::fs::write(&target, b"fixture\n").unwrap();
+        symlink(&target, &link).unwrap();
+        std::fs::hard_link(&target, &hard).unwrap();
+        assert!(safe_read(&link, MANIFEST_MAX, None, None).is_err());
+        assert!(safe_read(&hard, MANIFEST_MAX, None, None).is_err());
+        std::fs::remove_file(&hard).unwrap();
+        assert_eq!(
+            safe_read(&target, MANIFEST_MAX, None, None).unwrap(),
+            b"fixture\n"
+        );
+        std::fs::remove_file(&link).unwrap();
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_dir(&root).unwrap();
     }
 }
