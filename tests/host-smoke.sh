@@ -22,7 +22,35 @@ check_cli_unimplemented() {
     printf '%s\n' "$output" | grep -F 'is not implemented' >/dev/null
 }
 
-check_cli_unimplemented inspect ./binary
+fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/iu-inspect-smoke.XXXXXX")
+trap 'rm -rf "$fixture_dir"' EXIT HUP INT TERM
+fixture="$fixture_dir/unsigned-arm64"
+python3 - "$fixture" <<'PY'
+import struct
+import sys
+
+image = bytearray(32)
+struct.pack_into("<IIIIIIII", image, 0, 0xFEEDFACF, 0x0100000C, 0, 2, 0, 0, 0, 0)
+with open(sys.argv[1], "wb") as output:
+    output.write(image)
+PY
+chmod 0700 "$fixture"
+inspect_output=$("$cli" inspect "$fixture")
+printf '%s\n' "$inspect_output" | grep -F 'Architecture: ARM64' >/dev/null
+printf '%s\n' "$inspect_output" | grep -F 'Signature: NO_LC_CODE_SIGNATURE' >/dev/null
+printf '%s\n' "$inspect_output" | grep -F 'Preparation: PREPARATION_REQUIRED_BUT_NOT_IMPLEMENTED' >/dev/null
+printf '%s\n' "$inspect_output" | grep -F 'Launch permission: NOT GRANTED' >/dev/null
+printf '\000\000' >"$fixture_dir/truncated"
+chmod 0700 "$fixture_dir/truncated"
+if bad_output=$("$cli" inspect "$fixture_dir/truncated" 2>&1); then
+    echo 'CLI inspection accepted a truncated Mach-O' >&2
+    exit 1
+else
+    status=$?
+fi
+[ "$status" -eq 4 ]
+printf '%s\n' "$bad_output" | grep -F 'Inspection: INVALID_BINARY' >/dev/null
+printf '%s\n' "$bad_output" | grep -F 'Signature: TRUNCATED_OR_CORRUPT' >/dev/null
 check_cli_unimplemented sign ./binary
 check_cli_unimplemented sign ./binary --entitlements ./entitlements.plist
 check_cli_unimplemented install ./binary
@@ -38,6 +66,9 @@ else
 fi
 [ "$status" -eq 4 ]
 printf '%s\n' "$output" | grep -F 'Activation: UNKNOWN' >/dev/null
+
+# Local inspection remains independent of the absent daemon.
+"$cli" inspect "$fixture" | grep -F 'Inspection: COMPLETE' >/dev/null
 
 if output=$("$cli" doctor 2>&1); then
     echo 'CLI doctor unexpectedly reported operational compatibility' >&2

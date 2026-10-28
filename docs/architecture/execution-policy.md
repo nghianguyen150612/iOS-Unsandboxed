@@ -57,6 +57,8 @@ The result is versioned (`IU_POLICY_ABI_VERSION == 1`) and has fixed-width outco
 
 The evaluator's default result is `DENY_INTERNAL_ERROR`. Valid disabled configuration returns `DENY_DISABLED`. A configured but unverified backend returns `DENY_UNVERIFIED_BACKEND`. No ordinary diagnostic failure can result in `ALLOW_ELIGIBLE`.
 
+P010's local planner passes descriptor-derived target facts to this evaluator and keeps production policy disabled/unverified. A fixture-only context supports simulated evaluator coverage; its hypothetical outcome is not exposed through CLI or daemon IPC and does not set operational authorization.
+
 ## Test coverage and limits
 
 `tests/native-preflight-test.c` uses a temporary host fixture and synthetic platform/configuration facts. It covers compatibility classification, missing components, unsupported OS and device/version facts, disabled and unverified policy, protected Apple/Amethyst/project paths, prefix-boundary cases, relative/absolute paths, symlinks, hard links, directories, FIFO files, setuid/setgid modes, unsafe permissions/ownership, identity mismatch, malformed configuration, missing paths, and a hypothetical eligible regular executable. Tests require no root and do not touch jailbreak files. Passing these tests is simulated host-policy evidence, not device compatibility.

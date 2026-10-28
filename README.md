@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0 · **License:** MIT
 
-iOS-Unsandboxed is an experimental, SSH-oriented foundation for running compatible Mach-O ARM64 command-line programs on a rootful jailbroken iPad. It has no graphical interface. P001 established the project layout and rootful path contract. P003 adds read-only diagnostics and a side-effect-free native eligibility policy. P004 adds authenticated local CLI-to-daemon IPC. P005 adds a read-only disabled-state loader, richer lifecycle status, and a passive LaunchDaemon template. P007/P008 add a project-owned installer and controlled LaunchDaemon lifecycle. P009 adds a read-only, versioned Amethyst compatibility adapter and capability contracts. No release enables the experimental execution engine, prepares user binaries, changes sandboxes, or activates launch interception.
+iOS-Unsandboxed is an experimental, SSH-oriented foundation for running compatible Mach-O ARM64 command-line programs on a rootful jailbroken iPad. It has no graphical interface. P001 established the project layout and rootful path contract. P003 adds read-only diagnostics and a side-effect-free native eligibility policy. P004 adds authenticated local CLI-to-daemon IPC. P005 adds a read-only disabled-state loader, richer lifecycle status, and a passive LaunchDaemon template. P007/P008 add a project-owned installer and controlled LaunchDaemon lifecycle. P009 adds a read-only, versioned Amethyst compatibility adapter and capability contracts. P010 adds local executable identity recording and a read-only preparation preview. No release enables the experimental execution engine, prepares user binaries, changes sandboxes, or activates launch interception.
 
 ## Scope and reference device
 
@@ -23,17 +23,17 @@ chmod +x ./binary
 ./binary
 ```
 
-That workflow is aspirational. CLI operations such as `enable`, `disable`, signing, and user-binary installation still fail as unimplemented. The separate rootful project manager can install and maintain only this project's own package. Transparent preparation of signatures, entitlements, or jailbreak trust mechanisms is not implemented. Executables without `LC_CODE_SIGNATURE` are a critical future experiment; P001 makes no claim that they can run. No kernel exploit or kernel patch is part of this project.
+That workflow is aspirational. `iu inspect PATH` performs local read-only inspection and records the file identity; it grants no launch permission. CLI operations such as `enable`, `disable`, signing, and user-binary installation still fail as unimplemented. The separate rootful project manager can install and maintain only this project's own package. Transparent preparation of signatures, entitlements, or jailbreak trust mechanisms is not implemented. Executables without `LC_CODE_SIGNATURE` are a critical future experiment; P010 reports preparation as not implemented and makes no claim that they can run. No kernel exploit or kernel patch is part of this project.
 
 ## Components
 
-- `cli/`: Rust CLI named `ios-unsandboxed`; designed for SSH use and future diagnostics/configuration/error handling.
+- `cli/`: Rust CLI named `ios-unsandboxed`; local `inspect` uses a small C17 FFI wrapper to keep parsing in the shared native planner.
 - `daemon/`: strict C17 executable named `ios-unsandboxedd`; its foreground IPC server handles read-only status and preflight requests.
-- `native/`: reusable C17 read-only preflight, deterministic execution-eligibility policy, versioned Amethyst adapter and capability classifier, bounded Mach-O inspector, fail-closed persistent-state loader, and a fixed-path installer helper.
+- `native/`: reusable C17 read-only preflight, deterministic execution-eligibility policy, versioned Amethyst adapter and capability classifier, bounded Mach-O inspector, executable identity planner, fail-closed persistent-state loader, and a fixed-path installer helper.
 - `packaging/rootful/`: centralized path contract, disabled-state example, passive plist template, and manager entrypoint. The paired C17 helper handles package verification and filesystem transactions.
 - `docs/architecture/`: component boundaries, target build requirements, security limits, and installation ownership.
 
-The intended future flow and current boundaries are described in [the architecture overview](docs/architecture/overview.md), [the native preflight contract](docs/architecture/preflight-contract.md), [the execution eligibility policy](docs/architecture/execution-policy.md), [the Amethyst adapter ABI](docs/architecture/amethyst-adapter.md), [the capability contract](docs/architecture/amethyst-capability-contract.md), [the Mach-O inspection contract](docs/architecture/macho-inspection-contract.md), [service lifecycle](docs/architecture/service-lifecycle.md), [persistent state](docs/architecture/persistent-state.md), and [recovery/rollback](docs/architecture/recovery-rollback.md).
+The intended future flow and current boundaries are described in [the architecture overview](docs/architecture/overview.md), [the native preflight contract](docs/architecture/preflight-contract.md), [the execution eligibility policy](docs/architecture/execution-policy.md), [the Amethyst adapter ABI](docs/architecture/amethyst-adapter.md), [the capability contract](docs/architecture/amethyst-capability-contract.md), [the Mach-O inspection contract](docs/architecture/macho-inspection-contract.md), [executable identity](docs/architecture/executable-identity.md), [the launch preparation planner](docs/architecture/launch-preparation-planner.md), [the planner policy contract](docs/architecture/planner-policy-contract.md), [service lifecycle](docs/architecture/service-lifecycle.md), [persistent state](docs/architecture/persistent-state.md), and [recovery/rollback](docs/architecture/recovery-rollback.md).
 
 P002 inspected Amethyst source at a pinned upstream revision. The audit found a source-level launch hook suitable for a narrowly opted-in experiment, but Amethyst's normal preparation path skips Mach-O files without LC_CODE_SIGNATURE. A lower-level F_ADDSIGS path can construct an in-memory signature when directly invoked, but acceptance and launch behavior for a completely unsigned ARM64 executable are unverified on the reference iPad. See the [source audit](docs/research/amethyst-source-audit.md), [launch-path matrix](docs/research/launch-path-matrix.md), [signing and trust-cache audit](docs/research/signing-trustcache-audit.md), [ABI contract](docs/architecture/amethyst-abi-contract.md), and [unsigned Mach-O assessment](docs/architecture/unsigned-macho-feasibility.md). P002 did not implement or activate any of these mechanisms.
 
@@ -53,8 +53,9 @@ For the separate Apple ARM64 iOS build, use macOS with Xcode command line tools,
 ```sh
 make help
 make build       # host CLI and host diagnostic daemon
-make test        # Rust, native, IPC, packaging, installer fixtures, and host smoke checks
+make test        # Rust, native, planner, IPC, packaging, installer fixtures, and host smoke checks
 make adapter-test # Amethyst adapter, capability, evidence, and Mach-O fixtures
+make planner-test # executable identity, parser corpus, policy, and revalidation fixtures
 make native-test # isolated C17 preflight, policy, and peer-auth fixtures
 make state-test  # persistent-state format and safety fixtures
 make ipc-test    # temporary-socket protocol and lifecycle tests
@@ -75,7 +76,7 @@ CI keeps these gates distinct:
 
 Passing one gate does not imply that a later gate passed.
 
-## Executable behavior in P005
+## Executable behavior in P010
 
 The CLI supports `--help`, `--version`, read-only `doctor`, `doctor --amethyst`, and `status`. `doctor --amethyst` uses additive read-only IPC v1 when available and remains usable without the daemon. It reports the pinned source provenance, component file type, installed build and hook state as unverified, SSH path coverage as not tested, fully unsigned Mach-O support as blocked, and activation as disabled. It never calls private Amethyst XPC. `status` reports daemon response, IPC reachability, local daemon/plist file presence, the root-owned installation record, state file/schema, disabled activation, P003 Amethyst compatibility, and device acceptance as separate facts. It uses the additive P005 lifecycle request while preserving the P004 `GET_STATUS` wire response. If IPC is unavailable, activation and persistent-state facts are `UNKNOWN`. The daemon starts only when explicitly requested with `ios-unsandboxedd --serve` (foreground, root only). Development uses a private temporary directory with `ios-unsandboxedd --test-socket <path>`. `doctor` remains usable when IPC is unavailable.
 
@@ -97,7 +98,7 @@ ios-unsandboxed logs
 
 The explicit `--test-socket ... check` command exercises PING, the unchanged P004 status request, preflight, and lifecycle status against an isolated test socket. It reports kernel-authenticated peer credentials for physical-device qualification.
 
-`ios-unsandboxedd --probe` exposes the native C17 read-only preflight. PING confirms only that this project IPC endpoint responds; it does not establish Amethyst initialization or operational eligibility. `enable`, `disable`, `sign`, `install <binary>`, `inspect`, and `logs` remain unimplemented and fail safely. The project manager is separate from `iu install <binary>`: it installs only this project package and cannot prepare a user executable. The root-owned state format accepts only a disabled activation value; only the transaction manager can write the exact schema-v1 record, and it is not exposed through daemon IPC. The LaunchDaemon plist is staged inactive; lifecycle operations do not activate execution interception. The adapter's evidence/hash model and device gates are in [P009 validation](docs/validation/P009_ADAPTER_GATES.md). See [the IPC protocol](docs/architecture/ipc-protocol.md), [daemon security](docs/architecture/daemon-security.md), [IPC lifecycle](docs/architecture/ipc-lifecycle.md), and [device qualification](docs/validation/ios-device-ipc-qualification.md).
+`iu inspect PATH` performs local descriptor-based inspection under the invoking user's permissions and remains available when the daemon is unavailable. It reports a bounded Mach-O state, SHA-256 and filesystem identity, P003 policy outcome, P009 capability/compatibility state, and a preparation preview. Structural signature parsing does not imply cryptographic validity or trust; no launch permission is returned. `ios-unsandboxedd --probe` exposes the native C17 read-only preflight. PING confirms only that this project IPC endpoint responds; it does not establish Amethyst initialization or operational eligibility. `enable`, `disable`, `sign`, `install <binary>`, and `logs` remain unimplemented and fail safely. The project manager is separate from `iu install <binary>`: it installs only this project package and cannot prepare a user executable. The root-owned state format accepts only a disabled activation value; only the transaction manager can write the exact schema-v1 record, and it is not exposed through daemon IPC. The LaunchDaemon plist is staged inactive; lifecycle operations do not activate execution interception. The adapter's evidence/hash model and device gates are in [P009 validation](docs/validation/P009_ADAPTER_GATES.md); P010 offline gates are in [P010 validation](docs/validation/P010_PLANNER_GATES.md). See [the IPC protocol](docs/architecture/ipc-protocol.md), [daemon security](docs/architecture/daemon-security.md), [IPC lifecycle](docs/architecture/ipc-lifecycle.md), and [device qualification](docs/validation/ios-device-ipc-qualification.md).
 
 ## Rootful installation contract
 

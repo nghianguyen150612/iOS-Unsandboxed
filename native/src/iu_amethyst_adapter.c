@@ -212,6 +212,86 @@ int32_t iu_ame_macho_inspect_v1(const char *path,struct iu_ame_macho_result_v1 *
     free(bytes);return 0;
 }
 
+static int same_inspection_stat(const struct stat *a, const struct stat *b)
+{
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
+           a->st_mode == b->st_mode && a->st_uid == b->st_uid &&
+           a->st_gid == b->st_gid && a->st_nlink == b->st_nlink &&
+           a->st_size == b->st_size && a->st_mtime == b->st_mtime &&
+           IU_STAT_MTIME_NS(*a) == IU_STAT_MTIME_NS(*b) &&
+           a->st_ctime == b->st_ctime && IU_STAT_CTIME_NS(*a) == IU_STAT_CTIME_NS(*b);
+}
+
+int32_t iu_ame_macho_inspect_fd_v1(int fd, struct iu_ame_macho_result_v1 *r)
+{
+    struct stat before, after;
+    uint8_t *bytes = NULL;
+    size_t done = 0;
+    uint32_t arch = IU_ARCH_UNKNOWN;
+    if (r == NULL) return -IU_AME_ERROR_INVALID_ARGUMENT;
+    memset(r, 0, sizeof(*r));
+    r->abi_version = IU_AME_ADAPTER_ABI_VERSION;
+    r->struct_size = (uint32_t)sizeof(*r);
+    r->state = IU_AME_MACHO_IO_ERROR;
+    if (fd < 0 || fstat(fd, &before) != 0 || !S_ISREG(before.st_mode) ||
+        before.st_nlink != 1 || before.st_size < 0 ||
+        (uint64_t)before.st_size > IU_AME_MAX_FILE_SIZE) {
+        r->error_code = IU_AME_ERROR_UNSAFE_COMPONENT;
+        return -IU_AME_ERROR_IO;
+    }
+    bytes = malloc(before.st_size == 0 ? 1U : (size_t)before.st_size);
+    if (bytes == NULL) { r->error_code = IU_AME_ERROR_INTERNAL; return -IU_AME_ERROR_IO; }
+    while (done < (size_t)before.st_size) {
+        ssize_t got = pread(fd, bytes + done, (size_t)before.st_size - done, (off_t)done);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) { free(bytes); r->error_code = IU_AME_ERROR_IO; return -IU_AME_ERROR_IO; }
+        done += (size_t)got;
+    }
+    if (fstat(fd, &after) != 0 || !same_inspection_stat(&before, &after)) {
+        free(bytes); r->error_code = IU_AME_ERROR_IDENTITY_MISMATCH; return -IU_AME_ERROR_IDENTITY_MISMATCH;
+    }
+    r->state = classify_macho_bytes(bytes, (size_t)before.st_size, &arch);
+    r->architecture = arch;
+    if (arch == IU_ARCH_ARM64 && before.st_size >= 16) {
+        r->macho_cputype = rd32le(bytes + 4);
+        r->macho_cpusubtype = rd32le(bytes + 8);
+        r->macho_filetype = rd32le(bytes + 12);
+    }
+    r->file_type = IU_AME_FILE_REGULAR;
+    r->owner_uid = (uint32_t)before.st_uid; r->owner_gid = (uint32_t)before.st_gid;
+    r->mode = (uint32_t)(before.st_mode & 07777); r->link_count = (uint32_t)before.st_nlink;
+    r->device = (uint64_t)before.st_dev; r->inode = (uint64_t)before.st_ino;
+    r->file_size = (uint64_t)before.st_size;
+    free(bytes);
+    return 0;
+}
+
+int32_t iu_ame_sha256_fd_v1(int fd, uint8_t digest[IU_AME_SHA256_SIZE])
+{
+    struct stat before, after;
+    struct sha256_ctx hash;
+    uint8_t buffer[16384];
+    off_t offset = 0;
+    if (fd < 0 || digest == NULL || fstat(fd, &before) != 0 ||
+        !S_ISREG(before.st_mode) || before.st_nlink != 1 || before.st_size < 0 ||
+        (uint64_t)before.st_size > IU_AME_MAX_FILE_SIZE) return -IU_AME_ERROR_UNSAFE_COMPONENT;
+    sha_init(&hash);
+    while (offset < before.st_size) {
+        size_t want = (size_t)(before.st_size - offset);
+        ssize_t got;
+        if (want > sizeof(buffer)) want = sizeof(buffer);
+        got = pread(fd, buffer, want, offset);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) return -IU_AME_ERROR_IO;
+        sha_update(&hash, buffer, (size_t)got);
+        offset += got;
+    }
+    if (fstat(fd, &after) != 0 || !same_inspection_stat(&before, &after))
+        return -IU_AME_ERROR_IDENTITY_MISMATCH;
+    sha_final(&hash, digest);
+    return 0;
+}
+
 int32_t iu_ame_collect_component_v1(uint32_t id,const char *path,struct iu_ame_component_evidence_v1 *r)
 {
     struct stat lst,before,after;uint8_t *bytes=NULL;struct sha256_ctx hash;int rc;uint32_t architecture;

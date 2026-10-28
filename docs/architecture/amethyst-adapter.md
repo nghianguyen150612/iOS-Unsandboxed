@@ -46,3 +46,5 @@ Reserved operation identifiers are `PREPARE_EXECUTABLE`, `REGISTER_TRUST`, `APPL
 `ios-unsandboxed doctor --amethyst` uses the authenticated daemon read-only request when available. It prints the project source pin, component file-type classifications, unknown installed build/hook state, blocked fully unsigned Mach-O support, disabled activation, and `Device runtime validation: NOT RUN`. When the daemon is absent it prints the static source pin and explicit unknown runtime fields, and exits successfully. It does not contact Amethyst XPC.
 
 The adapter is not proof of launch success and does not make Amethyst's internal helpers an SDK. P009 performs no signing, trust-cache changes, sandbox changes, process manipulation, launch interception, file writes, or system/jailbreak mutations.
+
+P010 consumes the P009 capability classifications and uses the bounded parser through its borrowed-descriptor API, keeping file identity tied to the object already opened by the local planner. `SOURCE_CONFIRMED` remains source evidence, not runtime verification; planner output never authorizes a launch.
