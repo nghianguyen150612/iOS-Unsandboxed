@@ -6,6 +6,7 @@ pub const PING: u16 = 1;
 pub const GET_STATUS: u16 = 2;
 pub const GET_PREFLIGHT: u16 = 3;
 pub const GET_LIFECYCLE_STATUS: u16 = 4;
+pub const GET_AMETHYST_ADAPTER: u16 = 5;
 pub const RESPONSE: u16 = 0x8000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

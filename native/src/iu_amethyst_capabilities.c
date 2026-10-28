@@ -1,0 +1,78 @@
+#include "iu_amethyst_capabilities.h"
+
+#include <stddef.h>
+#include <string.h>
+
+struct capability_definition {
+    uint32_t id;
+    uint32_t status;
+    uint32_t evidence;
+};
+
+static const struct capability_definition definitions[IU_AME_CAPABILITY_COUNT] = {
+    { IU_AME_CAP_READ_ONLY_PROBE, IU_AME_CAP_SOURCE_CONFIRMED, IU_AME_EVIDENCE_HOST_FIXTURE },
+    { IU_AME_CAP_BUILD_IDENTIFICATION, IU_AME_CAP_UNVERIFIED, IU_AME_EVIDENCE_NONE },
+    { IU_AME_CAP_LAUNCHD_HOOK_DETECTION, IU_AME_CAP_NOT_IMPLEMENTED, IU_AME_EVIDENCE_FILESYSTEM_METADATA },
+    { IU_AME_CAP_BASE_HOOK_DETECTION, IU_AME_CAP_NOT_IMPLEMENTED, IU_AME_EVIDENCE_FILESYSTEM_METADATA },
+    { IU_AME_CAP_SSH_EXEC_PATH_COVERAGE, IU_AME_CAP_BLOCKED, IU_AME_EVIDENCE_NONE },
+    { IU_AME_CAP_ARM64_MACHO_INSPECTION, IU_AME_CAP_SOURCE_CONFIRMED, IU_AME_EVIDENCE_HOST_FIXTURE },
+    { IU_AME_CAP_SIGNED_MACHO_PREPARATION, IU_AME_CAP_NOT_IMPLEMENTED, IU_AME_EVIDENCE_NONE },
+    { IU_AME_CAP_ADHOC_MACHO_PREPARATION, IU_AME_CAP_NOT_IMPLEMENTED, IU_AME_EVIDENCE_NONE },
+    { IU_AME_CAP_MALFORMED_SIGNATURE_HANDLING, IU_AME_CAP_SOURCE_CONFIRMED, IU_AME_EVIDENCE_HOST_FIXTURE },
+    { IU_AME_CAP_NO_LC_CODE_SIGNATURE_HANDLING, IU_AME_CAP_SOURCE_CONFIRMED, IU_AME_EVIDENCE_HOST_FIXTURE },
+    { IU_AME_CAP_PROCESS_UNSANDBOX, IU_AME_CAP_BLOCKED, IU_AME_EVIDENCE_PINNED_SOURCE_AUDIT },
+    { IU_AME_CAP_EXECVE_INTERCEPTION, IU_AME_CAP_BLOCKED, IU_AME_EVIDENCE_PINNED_SOURCE_AUDIT },
+    { IU_AME_CAP_POSIX_SPAWN_INTERCEPTION, IU_AME_CAP_BLOCKED, IU_AME_EVIDENCE_PINNED_SOURCE_AUDIT },
+    { IU_AME_CAP_FUTURE_EXECUTION_ADAPTER, IU_AME_CAP_NOT_IMPLEMENTED, IU_AME_EVIDENCE_NONE }
+};
+
+int32_t iu_ame_capabilities_v1(struct iu_ame_capability_set_v1 *result)
+{
+    size_t i;
+    if (result == NULL) return -1;
+    memset(result, 0, sizeof(*result));
+    result->abi_version = IU_AME_CAPABILITY_ABI_VERSION;
+    result->struct_size = (uint32_t)sizeof(*result);
+    result->record_count = IU_AME_CAPABILITY_COUNT;
+    for (i = 0; i < IU_AME_CAPABILITY_COUNT; ++i) {
+        result->records[i].struct_size = (uint32_t)sizeof(result->records[i]);
+        result->records[i].capability_id = definitions[i].id;
+        result->records[i].status = definitions[i].status;
+        result->records[i].evidence_type = definitions[i].evidence;
+    }
+    return 0;
+}
+
+const char *iu_ame_capability_status_name_v1(uint32_t status)
+{
+    switch (status) {
+    case IU_AME_CAP_SOURCE_CONFIRMED: return "SOURCE_CONFIRMED";
+    case IU_AME_CAP_RUNTIME_VERIFIED: return "RUNTIME_VERIFIED";
+    case IU_AME_CAP_UNVERIFIED: return "UNVERIFIED";
+    case IU_AME_CAP_UNSUPPORTED: return "UNSUPPORTED";
+    case IU_AME_CAP_NOT_IMPLEMENTED: return "NOT_IMPLEMENTED";
+    case IU_AME_CAP_BLOCKED: return "BLOCKED";
+    default: return "INVALID";
+    }
+}
+
+const char *iu_ame_capability_name_v1(uint32_t id)
+{
+    switch (id) {
+    case IU_AME_CAP_READ_ONLY_PROBE: return "READ_ONLY_PROBE";
+    case IU_AME_CAP_BUILD_IDENTIFICATION: return "AMETHYST_BUILD_IDENTIFICATION";
+    case IU_AME_CAP_LAUNCHD_HOOK_DETECTION: return "LAUNCHD_HOOK_DETECTION";
+    case IU_AME_CAP_BASE_HOOK_DETECTION: return "BASE_HOOK_DETECTION";
+    case IU_AME_CAP_SSH_EXEC_PATH_COVERAGE: return "SSH_EXEC_PATH_COVERAGE";
+    case IU_AME_CAP_ARM64_MACHO_INSPECTION: return "ARM64_MACHO_INSPECTION";
+    case IU_AME_CAP_SIGNED_MACHO_PREPARATION: return "SIGNED_MACHO_PREPARATION";
+    case IU_AME_CAP_ADHOC_MACHO_PREPARATION: return "ADHOC_MACHO_PREPARATION";
+    case IU_AME_CAP_MALFORMED_SIGNATURE_HANDLING: return "MALFORMED_SIGNATURE_HANDLING";
+    case IU_AME_CAP_NO_LC_CODE_SIGNATURE_HANDLING: return "NO_LC_CODE_SIGNATURE_HANDLING";
+    case IU_AME_CAP_PROCESS_UNSANDBOX: return "PROCESS_UNSANDBOX";
+    case IU_AME_CAP_EXECVE_INTERCEPTION: return "EXECVE_INTERCEPTION";
+    case IU_AME_CAP_POSIX_SPAWN_INTERCEPTION: return "POSIX_SPAWN_INTERCEPTION";
+    case IU_AME_CAP_FUTURE_EXECUTION_ADAPTER: return "FUTURE_EXECUTION_ADAPTER";
+    default: return "INVALID";
+    }
+}
