@@ -513,7 +513,19 @@ def test_fixture_root_guards(suite: Suite) -> None:
     assert result.returncode != 0, "group/world-writable test root must be rejected"
 
 
+def test_reference_device_id_contract() -> None:
+    """Keep the production installer target aligned with preflight and P006."""
+    installer = (ROOT / "native/src/iu_installer.c").read_text(encoding="utf-8")
+    preflight = (ROOT / "native/src/iu_preflight.c").read_text(encoding="utf-8")
+    harness = (ROOT / "tests/device/ios-runtime-qualification.sh").read_text(encoding="utf-8")
+    assert 'strcmp(machine,"iPad4,4")' in installer, "installer must accept A1489/iPad4,4"
+    assert "iPad4,1" not in installer, "iPad4,1 identifies a different Apple device"
+    assert 'strcmp(facts.machine.value, "iPad4,4")' in preflight
+    assert '[ "$HW_MACHINE" = iPad4,4 ]' in harness
+
+
 def main() -> None:
+    test_reference_device_id_contract()
     assert HELPER.is_file()
     with tempfile.TemporaryDirectory(prefix="iu-installer-fixtures-") as temporary:
         suite = Suite(Path(temporary))
