@@ -2,6 +2,7 @@
 name = "ios-unsandboxed"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 rust-version = "1.74"
 description = "SSH-oriented management CLI for iOS-Unsandboxed"
 license = "MIT"

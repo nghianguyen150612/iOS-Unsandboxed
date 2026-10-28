@@ -19,7 +19,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run Rust static analysis
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Run Rust, native, IPC, packaging, installer fixtures, and host smoke tests
+      - name: Run Rust, native, planner, IPC, packaging, installer fixtures, and host smoke tests
         run: make test
 
   ios-cross-compile:

@@ -230,6 +230,11 @@ int32_t iu_ame_adapter_preview_v1(const struct iu_ame_preview_request_v1 *reques
                                   struct iu_ame_preview_result_v1 *result);
 int32_t iu_ame_adapter_reserved_operation_v1(uint32_t operation);
 int32_t iu_ame_macho_inspect_v1(const char *path, struct iu_ame_macho_result_v1 *result);
+/* Inspects a borrowed, already-open descriptor. The caller retains ownership;
+ * the descriptor offset is not changed. */
+int32_t iu_ame_macho_inspect_fd_v1(int fd, struct iu_ame_macho_result_v1 *result);
+/* Complete bounded SHA-256 of a regular, single-link file on a borrowed fd. */
+int32_t iu_ame_sha256_fd_v1(int fd, uint8_t digest[IU_AME_SHA256_SIZE]);
 const char *iu_ame_compatibility_name_v1(uint32_t compatibility);
 const char *iu_ame_macho_state_name_v1(uint32_t state);
 

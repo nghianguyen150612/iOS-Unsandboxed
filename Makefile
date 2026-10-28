@@ -11,17 +11,19 @@ HOST_INSTALLER_HELPER := build/host/installer-helper
 IOS_DAEMON := build/ios/ios-unsandboxedd
 IOS_INSTALLER_HELPER := build/ios/installer-helper
 NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu_service_state.c native/src/iu_amethyst_adapter.c native/src/iu_amethyst_capabilities.c
+PLANNER_SOURCE := native/src/iu_execution_planner.c
 LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test clean check-ios-toolchain build-ios
+.PHONY: help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
 	  'make build       Build the host CLI and diagnostic daemon' \
-	  'make test        Run Rust, native, IPC, package, lifecycle, and host smoke checks' \
+	  'make test        Run Rust, native, planner, IPC, package, lifecycle, and host smoke checks' \
 	  'make service-test Run mocked service lifecycle fixtures' \
 	  'make adapter-test Run read-only Amethyst adapter and Mach-O fixtures' \
+	  'make planner-test Run read-only executable identity planner fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
@@ -51,6 +53,7 @@ test: host-build
 	$(MAKE) installer-test
 	$(MAKE) service-test
 	$(MAKE) adapter-test
+	$(MAKE) planner-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -100,6 +103,18 @@ adapter-test:
 	  native/src/iu_amethyst_capabilities.c native/src/iu_policy.c native/src/iu_preflight.c \
 	  -o build/host/adapter-production-classifier-test
 	./build/host/adapter-production-classifier-test
+
+planner-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_EXECUTION_PLANNER_TESTING $(NATIVE_INCLUDES) \
+	  tests/planner/execution-planner-test.c $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/execution-planner-test
+	python3 tests/planner/planner-fixtures.py build/host/execution-planner-test
+	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+	  -DIU_EXECUTION_PLANNER_TESTING $(NATIVE_INCLUDES) tests/planner/execution-planner-test.c \
+	  $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/execution-planner-sanitized-test >/dev/null 2>&1; then \
+	  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+	    python3 tests/planner/planner-fixtures.py build/host/execution-planner-sanitized-test; \
+	else echo 'Planner sanitizers unavailable; strict C17 fixture run completed.'; fi
 
 check-ios-toolchain:
 	@case "$$(uname -s)" in \

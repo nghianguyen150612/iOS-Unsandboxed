@@ -4,6 +4,7 @@ use std::fs;
 use std::process::ExitCode;
 
 mod ipc;
+mod planner;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const USAGE: &str = "Usage: ios-unsandboxed <command> [arguments]\n\
@@ -12,7 +13,7 @@ Commands:\n\
   doctor                         Run read-only compatibility diagnostics\n\
   doctor --amethyst               Inspect the read-only Amethyst adapter contract\n\
   status                         Show daemon lifecycle and activation status\n\
-  inspect <binary>               Inspect a Mach-O binary (not implemented)\n\
+  inspect <binary>               Inspect a local Mach-O file (read-only)\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
   install <binary>               Install a binary (not implemented)\n\
@@ -34,6 +35,7 @@ enum Invocation {
     DoctorAmethyst(Option<OsString>),
     Status(Option<OsString>),
     TestCheck(OsString),
+    Inspect(OsString),
     ReservedCommand(&'static str),
 }
 
@@ -85,7 +87,7 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
         "disable" if args.len() == 1 => Ok(Invocation::ReservedCommand("disable")),
         "logs" if args.len() == 1 => Ok(Invocation::ReservedCommand("logs")),
         "inspect" if args.len() == 2 && !args[1].is_empty() => {
-            Ok(Invocation::ReservedCommand("inspect"))
+            Ok(Invocation::Inspect(args[1].clone()))
         }
         "install" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::ReservedCommand("install"))
@@ -122,6 +124,20 @@ fn main() -> ExitCode {
         Ok(Invocation::DoctorAmethyst(socket)) => print_amethyst_doctor(socket.as_deref()),
         Ok(Invocation::Status(test_socket)) => print_status(test_socket.as_deref()),
         Ok(Invocation::TestCheck(path)) => print_test_check(std::path::Path::new(&path)),
+        Ok(Invocation::Inspect(path)) => match planner::inspect(&path) {
+            Ok((report, valid)) => {
+                print!("{report}");
+                if valid {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(4)
+                }
+            }
+            Err(error) => {
+                eprintln!("ios-unsandboxed: inspection failed: {error}");
+                ExitCode::from(4)
+            }
+        },
         Ok(Invocation::ReservedCommand(command)) => {
             eprintln!(
                 "ios-unsandboxed: '{command}' is not implemented in v{VERSION}; no system state was changed."
@@ -617,7 +633,7 @@ mod tests {
         }
         assert_eq!(
             parse_args(&args(&["inspect", "./binary"])),
-            Ok(Invocation::ReservedCommand("inspect"))
+            Ok(Invocation::Inspect(OsString::from("./binary")))
         );
         assert_eq!(
             parse_args(&args(&["install", "./binary"])),
