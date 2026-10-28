@@ -17,7 +17,7 @@ LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test trust-provider-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -29,6 +29,8 @@ help:
 	  'make policy-test  Run policy store and manager fixtures' \
 	  'make provenance-test Run evidence and trust-boundary fixtures' \
 	  'make launch-binding-test Run identity and scope fixtures' \
+	  'make trust-provider-test Run signed-manifest and trust-anchor fixtures' \
+	  'make origin-policy-test Run fail-closed origin-policy fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
@@ -62,6 +64,8 @@ test: host-build
 	$(MAKE) policy-test
 	$(MAKE) provenance-test
 	$(MAKE) launch-binding-test
+	$(MAKE) trust-provider-test
+	$(MAKE) origin-policy-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -170,3 +174,10 @@ launch-binding-test:
 	python3 tests/launch-binding/fixtures.py build/host/launch-scope-test build/host/launch-binding-test
 	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_LAUNCH_BINDING_TESTING $(NATIVE_INCLUDES) tests/launch-binding/launch-binding-test.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/launch-binding-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/launch-binding/fixtures.py build/host/launch-binding-sanitized-test; else echo 'Launch binding sanitizers unavailable'; fi
 	@if [ -x target/debug/ios-unsandboxed ]; then python3 tests/launch-binding/cli-test.py; if nm target/debug/ios-unsandboxed | grep -q iu_provenance_test_verify; then echo 'test verifier leaked into CLI' >&2; exit 1; fi; fi
+
+trust-provider-test:
+	cargo test --locked --workspace provenance::tests::
+
+origin-policy-test:
+	cargo test --locked --workspace provenance::tests::signed_claims_are_authenticated_but_origin_remains_unverified
+	cargo test --locked --workspace provenance::tests::revoked_anchor_has_valid_signature_but_is_not_trusted

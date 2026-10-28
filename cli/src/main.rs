@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod ipc;
 mod planner;
+mod provenance;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const USAGE: &str = "Usage: ios-unsandboxed <command> [arguments]\n\
@@ -15,6 +16,8 @@ Commands:\n\
   status                         Show daemon lifecycle and activation status\n\
   inspect <binary>               Inspect a local Mach-O file (read-only)\n\
   plan <binary>                  Preview provenance and launch binding (read-only)\n\
+  provenance verify <manifest> <binary>\n\
+                                 Verify signed evidence (read-only)\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
   install <binary>               Install a binary (not implemented)\n\
@@ -38,6 +41,7 @@ enum Invocation {
     TestCheck(OsString),
     Inspect(OsString),
     Plan(OsString),
+    ProvenanceVerify(OsString, OsString),
     ReservedCommand(&'static str),
 }
 
@@ -92,6 +96,17 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
             Ok(Invocation::Inspect(args[1].clone()))
         }
         "plan" if args.len() == 2 && !args[1].is_empty() => Ok(Invocation::Plan(args[1].clone())),
+        "provenance"
+            if args.len() == 4
+                && args[1] == OsStr::new("verify")
+                && !args[2].is_empty()
+                && !args[3].is_empty() =>
+        {
+            Ok(Invocation::ProvenanceVerify(
+                args[2].clone(),
+                args[3].clone(),
+            ))
+        }
         "install" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::ReservedCommand("install"))
         }
@@ -142,6 +157,22 @@ fn main() -> ExitCode {
                 }
                 Err(error) => {
                     eprintln!("ios-unsandboxed: inspection failed: {error}");
+                    ExitCode::from(4)
+                }
+            }
+        }
+        Ok(Invocation::ProvenanceVerify(manifest, artifact)) => {
+            match provenance::verify_cli(std::path::Path::new(&manifest), &artifact) {
+                Ok((report, accepted)) => {
+                    print!("{report}");
+                    if accepted {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(4)
+                    }
+                }
+                Err(error) => {
+                    eprintln!("ios-unsandboxed: provenance inspection failed: {error}");
                     ExitCode::from(4)
                 }
             }
@@ -646,6 +677,13 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["plan", "./binary"])),
             Ok(Invocation::Plan(OsString::from("./binary")))
+        );
+        assert_eq!(
+            parse_args(&args(&["provenance", "verify", "./manifest", "./binary"])),
+            Ok(Invocation::ProvenanceVerify(
+                OsString::from("./manifest"),
+                OsString::from("./binary")
+            ))
         );
         assert_eq!(
             parse_args(&args(&["install", "./binary"])),

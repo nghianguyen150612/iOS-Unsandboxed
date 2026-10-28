@@ -7,6 +7,11 @@ rust-version = "1.74"
 description = "SSH-oriented management CLI for iOS-Unsandboxed"
 license = "MIT"
 
+[dependencies]
+ed25519-dalek = { version = "=2.1.1", default-features = false, features = ["std"] }
+sha2 = "0.10.8"
+libc = "0.2"
+
 [[bin]]
 name = "ios-unsandboxed"
 path = "src/main.rs"

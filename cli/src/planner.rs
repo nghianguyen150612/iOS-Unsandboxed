@@ -93,6 +93,29 @@ pub fn plan(path: &OsStr) -> Result<(String, bool), String> {
     inspect_inner(path, true)
 }
 
+pub fn artifact_identity(path: &OsStr) -> Result<crate::provenance::ArtifactIdentity, String> {
+    let path_c = CString::new(path.as_bytes())
+        .map_err(|_| "path contains an embedded NUL byte".to_owned())?;
+    let mut out = std::mem::MaybeUninit::<PlanV1>::zeroed();
+    let rc = unsafe { iu_execution_plan_create_v1(path_c.as_ptr(), out.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(format!("artifact inspection failed ({})", -rc));
+    }
+    let out = unsafe { out.assume_init() };
+    if out.abi_version != 1
+        || out.struct_size as usize != std::mem::size_of::<PlanV1>()
+        || out.inspection_status != 1
+    {
+        return Err("artifact identity is incomplete".into());
+    }
+    Ok(crate::provenance::ArtifactIdentity {
+        sha256: out.sha256,
+        size: out.file_size,
+        architecture: out.architecture,
+        filetype: out.macho_filetype,
+    })
+}
+
 fn inspect_inner(path: &OsStr, binding: bool) -> Result<(String, bool), String> {
     let path_c = CString::new(path.as_bytes())
         .map_err(|_| "path contains an embedded NUL byte".to_owned())?;
