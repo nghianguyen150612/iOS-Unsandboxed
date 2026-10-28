@@ -392,7 +392,7 @@ static int check_production_platform(const struct context *ctx)
     char machine[64], product[64]; size_t n=sizeof(machine), p=sizeof(product);
     if(sysctlbyname("hw.machine",machine,&n,NULL,0)!=0)return bad("cannot identify hardware; production mutation refused");
     machine[sizeof(machine)-1]='\0';
-    if(strcmp(machine,"iPad4,1")!=0)return bad("production mutation is limited to the iPad mini 2 Wi-Fi (A1489) reference target");
+    if(strcmp(machine,"iPad4,4")!=0)return bad("production mutation is limited to the iPad mini 2 Wi-Fi (A1489) reference target");
     if(sysctlbyname("kern.osproductversion",product,&p,NULL,0)!=0)return bad("cannot identify iOS product version; production mutation refused");
     product[sizeof(product)-1]='\0';
     if(strcmp(product,"12.5.7")!=0)return bad("production mutation is limited to iOS 12.5.7");
@@ -1331,7 +1331,7 @@ static void print_help(void)
          "  uninstall  Remove only verified project-owned files; requires --apply\n"
          "  recover    Restore the journal's verified pre-transaction generation\n\n"
          "Fixture mode: --test-root ABSOLUTE_PRIVATE_DIRECTORY. It requires an existing isolated root and never calls launchctl.\n"
-         "Production mutation requires root, iPad4,1, iOS 12.5.7, and verified rootful paths.\n"
+         "Production mutation requires root, iPad4,4, iOS 12.5.7, and verified rootful paths.\n"
          "No command activates execution or registers the LaunchDaemon. No command supports force.");
 }
 int main(int argc,char **argv)
