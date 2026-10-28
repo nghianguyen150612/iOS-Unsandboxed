@@ -36,6 +36,9 @@ fn main() {
         .unwrap_or_else(|| "ar".into());
     let sources = [
         "native/src/iu_execution_planner.c",
+        "native/src/iu_artifact_provenance.c",
+        "native/src/iu_launch_binding.c",
+        "native/src/iu_policy_store.c",
         "native/src/iu_amethyst_adapter.c",
         "native/src/iu_amethyst_capabilities.c",
         "native/src/iu_policy.c",
@@ -43,6 +46,9 @@ fn main() {
     ];
     for header in [
         "native/include/iu_execution_planner.h",
+        "native/include/iu_artifact_provenance.h",
+        "native/include/iu_launch_binding.h",
+        "native/include/iu_policy_store.h",
         "native/include/iu_amethyst_adapter.h",
         "native/include/iu_amethyst_capabilities.h",
         "native/include/iu_policy.h",

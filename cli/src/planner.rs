@@ -50,7 +50,24 @@ struct PlanV1 {
 
 const _: [(); 1232] = [(); std::mem::size_of::<PlanV1>()];
 
+#[repr(C)]
+struct LaunchSummaryV1 {
+    abi_version: u32,
+    struct_size: u32,
+    scope_state: u32,
+    store_state: u32,
+    provenance_state: u32,
+    decision: u32,
+    boundary_status: u32,
+    operational_authorization: u32,
+    device: u64,
+    inode: u64,
+    sha256: [u8; 32],
+}
+
 extern "C" {
+    fn iu_launch_binding_path_summary_v1(path: *const c_char, summary: *mut LaunchSummaryV1)
+        -> i32;
     fn iu_execution_plan_create_v1(path: *const c_char, result: *mut PlanV1) -> i32;
     fn iu_execution_plan_preparation_name_v1(state: u32) -> *const c_char;
     fn iu_execution_plan_preview_name_v1(status: u32) -> *const c_char;
@@ -69,6 +86,14 @@ fn c_name(value: *const c_char) -> &'static str {
 }
 
 pub fn inspect(path: &OsStr) -> Result<(String, bool), String> {
+    inspect_inner(path, false)
+}
+
+pub fn plan(path: &OsStr) -> Result<(String, bool), String> {
+    inspect_inner(path, true)
+}
+
+fn inspect_inner(path: &OsStr, binding: bool) -> Result<(String, bool), String> {
     let path_c = CString::new(path.as_bytes())
         .map_err(|_| "path contains an embedded NUL byte".to_owned())?;
     let mut plan = std::mem::MaybeUninit::<PlanV1>::zeroed();
@@ -125,7 +150,7 @@ pub fn inspect(path: &OsStr) -> Result<(String, bool), String> {
         }
         _ => ("COMPLETE".to_owned(), true),
     };
-    Ok((format!(
+    let mut report = format!(
         "iOS-Unsandboxed v0.1.0\n\nFile: {path}\nFile type: REGULAR\nArchitecture: {architecture}\nMach-O: {filetype}\nSignature: {macho}\nPreparation: {}\nSHA-256: {digest}\nIdentity: RECORDED (device={}, inode={}, size={}, mode={:04o}, uid={}, gid={}, links={}, mtime={}.{:09}, ctime={}.{:09})\nRevalidation: REQUIRED BEFORE ANY FUTURE OPERATION\nInspection: {inspection}\nPlanner preview: {preview}\nP003 policy outcome: {} (reason={})\nRequired capabilities: ARM64_MACHO_INSPECTION, FUTURE_EXECUTION_ADAPTER (0x{:08x})\nMissing prerequisites: {missing_prerequisites} (0x{:08x})\nAmethyst compatibility: {adapter}\nRuntime hook state: UNVERIFIED\nSSH interception coverage: BLOCKED / UNVERIFIED\nAmethyst trust-cache support: UNVERIFIED\nSigning preparation: NOT IMPLEMENTED\nProcess unsandbox: BLOCKED\nCryptographic signature validity: NOT VERIFIED\nKernel acceptance: NOT VERIFIED\nSandbox policy: NOT VERIFIED\nDynamic-loader startup: NOT VERIFIED\nDevice runtime verified: NO\nExecution activation: DISABLED\nLaunch permission: NOT GRANTED\n",
         prep, plan.device_number, plan.inode, plan.file_size, plan.mode,
         plan.owner_uid, plan.owner_gid, plan.link_count,
@@ -133,7 +158,54 @@ pub fn inspect(path: &OsStr) -> Result<(String, bool), String> {
         plan.change_seconds, plan.change_nanoseconds,
         policy_name(plan.policy_outcome),
         plan.policy_reason, plan.required_capabilities, plan.missing_prerequisites,
-    ), valid))
+    );
+    if binding {
+        let mut summary = std::mem::MaybeUninit::<LaunchSummaryV1>::zeroed();
+        let rc =
+            unsafe { iu_launch_binding_path_summary_v1(path_c.as_ptr(), summary.as_mut_ptr()) };
+        if rc != 0 {
+            return Err("launch binding could not verify the same open object".to_owned());
+        }
+        let summary = unsafe { summary.assume_init() };
+        if summary.abi_version != 1
+            || summary.struct_size as usize != std::mem::size_of::<LaunchSummaryV1>()
+            || summary.device != plan.device_number
+            || summary.inode != plan.inode
+            || summary.sha256 != plan.sha256
+            || summary.operational_authorization != 0
+            || summary.boundary_status != 1
+        {
+            return Err("launch binding identity or ABI mismatch".to_owned());
+        }
+        let scope = match summary.scope_state {
+            1 => "NOT CONFIGURED",
+            2 => "MATCH (directory only)",
+            _ => "UNVERIFIED",
+        };
+        let provenance = match summary.provenance_state {
+            1 => "EVIDENCE ABSENT",
+            2 => "LOCAL DECLARATION ONLY",
+            3 => "MALFORMED",
+            4 => "IDENTITY MISMATCH",
+            5 => "UNTRUSTED",
+            6 => "VERIFIED",
+            7 => "KNOWN PROTECTED",
+            _ => "UNVERIFIED",
+        };
+        let reason = match summary.decision {
+            1 => "POLICY_DISABLED",
+            2 => "KNOWN_PROTECTED",
+            3 => "PROVENANCE_UNKNOWN",
+            4 => "ORIGIN_NOT_AUTHENTICATED",
+            5 => "PROVENANCE_IDENTITY_MISMATCH",
+            6 => "SCOPE_NOT_CONFIGURED_OR_UNVERIFIED",
+            7 => "UNSUPPORTED_ARTIFACT",
+            _ => "UNKNOWN",
+        };
+        use std::fmt::Write;
+        let _ = writeln!(report, "Scope match: {scope} (store state={})\nArtifact provenance: {provenance}\nLaunch binding: PREVIEW ONLY; future launch boundary NOT IMPLEMENTED\nLaunch decision: BLOCKED ({reason})\nOperational authorization: FALSE", summary.store_state);
+    }
+    Ok((report, valid))
 }
 
 fn missing_prerequisite_names(mask: u32) -> String {

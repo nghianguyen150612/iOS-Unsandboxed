@@ -14,6 +14,7 @@ Commands:\n\
   doctor --amethyst               Inspect the read-only Amethyst adapter contract\n\
   status                         Show daemon lifecycle and activation status\n\
   inspect <binary>               Inspect a local Mach-O file (read-only)\n\
+  plan <binary>                  Preview provenance and launch binding (read-only)\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
   install <binary>               Install a binary (not implemented)\n\
@@ -36,6 +37,7 @@ enum Invocation {
     Status(Option<OsString>),
     TestCheck(OsString),
     Inspect(OsString),
+    Plan(OsString),
     ReservedCommand(&'static str),
 }
 
@@ -89,6 +91,7 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
         "inspect" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::Inspect(args[1].clone()))
         }
+        "plan" if args.len() == 2 && !args[1].is_empty() => Ok(Invocation::Plan(args[1].clone())),
         "install" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::ReservedCommand("install"))
         }
@@ -101,9 +104,8 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
         {
             Ok(Invocation::ReservedCommand("sign"))
         }
-        "doctor" | "status" | "inspect" | "sign" | "install" | "enable" | "disable" | "logs" => {
-            Err(UsageError("invalid command arguments"))
-        }
+        "doctor" | "status" | "inspect" | "plan" | "sign" | "install" | "enable" | "disable"
+        | "logs" => Err(UsageError("invalid command arguments")),
         _ => Err(UsageError("unknown command or option")),
     }
 }
@@ -124,20 +126,26 @@ fn main() -> ExitCode {
         Ok(Invocation::DoctorAmethyst(socket)) => print_amethyst_doctor(socket.as_deref()),
         Ok(Invocation::Status(test_socket)) => print_status(test_socket.as_deref()),
         Ok(Invocation::TestCheck(path)) => print_test_check(std::path::Path::new(&path)),
-        Ok(Invocation::Inspect(path)) => match planner::inspect(&path) {
-            Ok((report, valid)) => {
-                print!("{report}");
-                if valid {
-                    ExitCode::SUCCESS
-                } else {
+        Ok(Invocation::Inspect(path) | Invocation::Plan(path)) => {
+            match if args[0] == OsStr::new("plan") {
+                planner::plan(&path)
+            } else {
+                planner::inspect(&path)
+            } {
+                Ok((report, valid)) => {
+                    print!("{report}");
+                    if valid {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(4)
+                    }
+                }
+                Err(error) => {
+                    eprintln!("ios-unsandboxed: inspection failed: {error}");
                     ExitCode::from(4)
                 }
             }
-            Err(error) => {
-                eprintln!("ios-unsandboxed: inspection failed: {error}");
-                ExitCode::from(4)
-            }
-        },
+        }
         Ok(Invocation::ReservedCommand(command)) => {
             eprintln!(
                 "ios-unsandboxed: '{command}' is not implemented in v{VERSION}; no system state was changed."
@@ -634,6 +642,10 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["inspect", "./binary"])),
             Ok(Invocation::Inspect(OsString::from("./binary")))
+        );
+        assert_eq!(
+            parse_args(&args(&["plan", "./binary"])),
+            Ok(Invocation::Plan(OsString::from("./binary")))
         );
         assert_eq!(
             parse_args(&args(&["install", "./binary"])),

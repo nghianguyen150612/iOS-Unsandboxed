@@ -61,3 +61,5 @@ python3 tests/packaging/rootful-package-test.py dist/ios-unsandboxed-0.1.0-rootf
 ```
 
 The macOS CI job cross-compiles all three ARM64 iOS artifacts, inspects Mach-O headers, dependencies and signing metadata, assembles the package, verifies its hashes, builds it twice in isolated output directories for reproducibility, and uploads the directory and archive as a workflow artifact. Package creation and CI do not prove installation or process startup on the reference iPad.
+
+The P012 native provenance and launch-binding objects are statically linked into the existing CLI; no packaged executable, daemon job, installation manifest entry, or IPC operation is added.
