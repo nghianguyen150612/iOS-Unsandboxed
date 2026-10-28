@@ -8,7 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-static void build_document(char *out,size_t cap,const struct iu_execution_plan_v1 *p,const char *origin){static const char hex[]="0123456789abcdef";char hash[65];for(unsigned i=0;i<32;i++){hash[2*i]=hex[p->sha256[i]>>4];hash[2*i+1]=hex[p->sha256[i]&15];}hash[64]=0;assert(snprintf(out,cap,"schema_version=1\nartifact_sha256=%s\nartifact_size=%llu\narchitecture=%u\nfiletype=%u\nsource=manifest\npublisher=fixture-publisher\nbuild=fixture-build\nmanifest=fixture-manifest\nanchor=fixture-anchor\norigin=%s\nalgorithm=fixture-v1\nproof=fixture-proof\n",hash,(unsigned long long)p->file_size,p->architecture,p->macho_filetype,origin)>0);}
+static void build_document(char *out,size_t cap,const struct iu_execution_plan_v1 *p,const char *origin){static const char hex[]="0123456789abcdef";char hash[65];for(unsigned i=0;i<32;i++){hash[2*i]=hex[p->sha256[i]>>4];hash[2*i+1]=hex[p->sha256[i]&15];}hash[64]=0;assert(snprintf(out,cap,"schema_version=1\nartifact_sha256=%s\nartifact_size=%llu\narchitecture=%u\nfiletype=%u\nsource=manifest\npublisher=fixture-publisher\nbuild=fixture-build\nmanifest=fixture-manifest\nanchor=fixture-anchor\norigin=%s\nalgorithm=fixture-v1\nproof=proof-%s\n",hash,(unsigned long long)p->file_size,p->architecture,p->macho_filetype,origin,origin)>0);}
 int main(int argc,char **argv){
     const char *logical="/opt/ios-unsandboxed-scopes/enrolled/innocent";char physical[1024],data[1024],doc[2048],encoded[IU_POLICY_STORE_MAX_BYTES];size_t len;uint64_t dev,ino;int root,datadir,fd,src,storefd;char buf[512];ssize_t got;
     struct iu_policy_store store;struct iu_launch_result_v1 r;struct iu_launch_request_v1 q;

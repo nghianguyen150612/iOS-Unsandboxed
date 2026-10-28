@@ -13,11 +13,12 @@ int main(int argc,char **argv){
     assert(verify(NULL,0,&p)==IU_PROVENANCE_EVIDENCE_ABSENT);
     document(doc,sizeof(doc),&p,"local","fixture-anchor","unprotected","none","fixture-proof");assert(verify(doc,strlen(doc),&p)==IU_PROVENANCE_LOCAL_DECLARATION_ONLY);
     document(doc,sizeof(doc),&p,"manifest","fixture-anchor","unprotected","none","fixture-proof");assert(verify(doc,strlen(doc),&p)==IU_PROVENANCE_UNVERIFIED);
-    document(doc,sizeof(doc),&p,"manifest","fixture-anchor","unprotected","fixture-v1","fixture-proof");
+    document(doc,sizeof(doc),&p,"manifest","fixture-anchor","unprotected","fixture-v1","proof-unprotected");
 #ifdef IU_PROVENANCE_TESTING
     assert(verify(doc,strlen(doc),&p)==IU_PROVENANCE_EVIDENCE_VERIFIED);
-    document(temp,sizeof(temp),&p,"manifest","fixture-anchor","protected","fixture-v1","fixture-proof");assert(verify(temp,strlen(temp),&p)==IU_PROVENANCE_PROTECTED_ARTIFACT_KNOWN);
-    document(temp,sizeof(temp),&p,"manifest","unknown-anchor","unprotected","fixture-v1","fixture-proof");assert(verify(temp,strlen(temp),&p)==IU_PROVENANCE_EVIDENCE_UNTRUSTED);
+    document(temp,sizeof(temp),&p,"manifest","fixture-anchor","protected","fixture-v1","proof-protected");assert(verify(temp,strlen(temp),&p)==IU_PROVENANCE_PROTECTED_ARTIFACT_KNOWN);
+    document(temp,sizeof(temp),&p,"manifest","unknown-anchor","unprotected","fixture-v1","proof-unprotected");assert(verify(temp,strlen(temp),&p)==IU_PROVENANCE_EVIDENCE_UNTRUSTED);
+    document(temp,sizeof(temp),&p,"manifest","fixture-anchor","protected","fixture-v1","proof-unprotected");assert(verify(temp,strlen(temp),&p)==IU_PROVENANCE_EVIDENCE_UNTRUSTED);
     document(temp,sizeof(temp),&p,"manifest","fixture-anchor","unprotected","fixture-v1","tampered");assert(verify(temp,strlen(temp),&p)==IU_PROVENANCE_EVIDENCE_UNTRUSTED);
 #else
     assert(verify(doc,strlen(doc),&p)==IU_PROVENANCE_EVIDENCE_MALFORMED);
