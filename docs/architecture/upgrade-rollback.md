@@ -23,3 +23,5 @@ P007 never installs the plist into `/Library/LaunchDaemons`. If the active proje
 Repeated uninstall returns success when no verified install manifest remains and leaves any unowned remnants for review. A transaction journal remains after interrupted work; run `recover --apply` before retrying a mutating command.
 
 P011 policy is independent of package generations: valid policy is preserved across upgrades and rollbacks, unsupported/corrupt policy blocks those operations, and uninstall preserves it for review. See [policy recovery](policy-recovery.md).
+
+P013 trust metadata is also independent of package generations. Upgrade preserves the live trust directory, rollback never restores trust bytes from a package backup, and uninstall reports and preserves trust metadata for administrator review. Package mutation refuses an unresolved trust transaction; trust mutation and recovery use the same P007 installer lock as package work. A committed revocation therefore remains revoked through package rollback. Filesystem-only generations do not provide adversarial rollback resistance; see [trust rollback semantics](trust-rollback-semantics.md).

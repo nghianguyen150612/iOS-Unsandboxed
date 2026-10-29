@@ -393,6 +393,166 @@ fn same_metadata(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         && a.ctime_nsec() == b.ctime_nsec()
 }
 
+fn ensure_settled_trust_directory(dir: &File) -> Result<(), String> {
+    for artifact in [
+        "transaction.v1",
+        "stage.v1",
+        ".stage.tmp",
+        ".transaction.tmp",
+    ] {
+        let name = std::ffi::CString::new(artifact).expect("fixed trust artifact name");
+        let mut metadata: libc::stat = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::fstatat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                &mut metadata,
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result == 0 {
+            return Err(
+                "TRUST_TRANSACTION_PENDING: transaction journal or staged artifact exists".into(),
+            );
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ENOENT) {
+            return Err(format!(
+                "TRUST_TRANSACTION_PENDING: trust transaction safety cannot be established: {error}"
+            ));
+        }
+    }
+
+    // A journal renamed to an unexpected name is still unresolved evidence.
+    // Permit only the canonical store entry in this private directory.
+    let dot = std::ffi::CString::new(".").expect("fixed dot path");
+    let scan_fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            dot.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if scan_fd < 0 {
+        return Err("TRUST_TRANSACTION_PENDING: cannot scan trust metadata directory".into());
+    }
+    let stream = unsafe { libc::fdopendir(scan_fd) };
+    if stream.is_null() {
+        unsafe { libc::close(scan_fd) };
+        return Err("TRUST_TRANSACTION_PENDING: cannot scan trust metadata directory".into());
+    }
+    loop {
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break;
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if name != b"."
+            && name != b".."
+            && name != TRUST_FILE.as_bytes()
+            && name != b"generation.v1"
+        {
+            unsafe { libc::closedir(stream) };
+            return Err(
+                "TRUST_TRANSACTION_PENDING: unexpected trust metadata artifact exists".into(),
+            );
+        }
+    }
+    if unsafe { libc::closedir(stream) } != 0 {
+        return Err("TRUST_TRANSACTION_PENDING: trust metadata directory scan failed".into());
+    }
+    Ok(())
+}
+
+fn parse_generation_anchor(bytes: &[u8]) -> Result<(u64, [u8; 32]), String> {
+    if bytes.is_empty()
+        || bytes.len() > 192
+        || !bytes.is_ascii()
+        || bytes.last() != Some(&b'\n')
+        || bytes.contains(&b'\r')
+        || bytes.contains(&0)
+    {
+        return Err("TRUST_GENERATION_INCONSISTENT: generation anchor is malformed".into());
+    }
+    let lines: Vec<&str> = std::str::from_utf8(bytes)
+        .map_err(|_| "TRUST_GENERATION_INCONSISTENT: generation anchor is not UTF-8")?
+        .split_terminator('\n')
+        .collect();
+    if lines.len() != 4
+        || lines[0] != "ios-unsandboxed-trust-generation"
+        || lines[1] != "schema_version=1"
+    {
+        return Err("TRUST_GENERATION_INCONSISTENT: unsupported generation anchor schema".into());
+    }
+    let generation = canonical_uint(
+        lines[2]
+            .strip_prefix("generation=")
+            .ok_or("TRUST_GENERATION_INCONSISTENT: missing generation")?,
+    )?;
+    if generation == 0 {
+        return Err("TRUST_GENERATION_INCONSISTENT: zero generation".into());
+    }
+    let digest = hex_decode::<32>(
+        lines[3]
+            .strip_prefix("store_sha256=")
+            .ok_or("TRUST_GENERATION_INCONSISTENT: missing store digest")?,
+    )?;
+    Ok((generation, digest))
+}
+
+fn read_generation_anchor(dir: &File, uid: u32, gid: u32) -> Result<Option<Vec<u8>>, String> {
+    let name = std::ffi::CString::new("generation.v1").expect("fixed generation name");
+    let mut initial: libc::stat = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            &mut initial,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            return Ok(None);
+        }
+        return Err(format!(
+            "TRUST_GENERATION_INCONSISTENT: cannot inspect generation anchor: {error}"
+        ));
+    }
+    let mut file = open_child(dir, &name, false).map_err(|error| {
+        format!("TRUST_GENERATION_INCONSISTENT: cannot open generation anchor: {error}")
+    })?;
+    let before = file.metadata().map_err(|e| e.to_string())?;
+    if !before.is_file()
+        || before.uid() != uid
+        || before.gid() != gid
+        || before.mode() & 0o7777 != 0o600
+        || before.mode() & 0o7000 != 0
+        || before.nlink() != 1
+        || before.size() > 192
+    {
+        return Err(
+            "TRUST_GENERATION_INCONSISTENT: generation anchor ownership, mode, or size is unsafe"
+                .into(),
+        );
+    }
+    let mut bytes = Vec::with_capacity(before.size() as usize);
+    (&mut file)
+        .take(193)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let after = file.metadata().map_err(|e| e.to_string())?;
+    let current = open_child(dir, &name, false)
+        .and_then(|entry| entry.metadata().map_err(|e| e.to_string()))?;
+    if bytes.len() > 192 || !same_metadata(&before, &after) || !same_metadata(&before, &current) {
+        return Err(
+            "TRUST_GENERATION_INCONSISTENT: generation anchor changed while being read".into(),
+        );
+    }
+    Ok(Some(bytes))
+}
+
 fn load_store_from_root(
     root: File,
     components: &[&std::ffi::CStr],
@@ -421,6 +581,9 @@ fn load_store_from_root(
         dirs.push(child);
     }
     let dir = dirs.last().ok_or("missing trust directory")?;
+    // A transaction record or staged artifact makes the snapshot unsettled.
+    // Treat symlinks and unexpected names as pending, without following them.
+    ensure_settled_trust_directory(dir)?;
     let name = std::ffi::CString::new(TRUST_FILE).map_err(|e| e.to_string())?;
     let mut file = open_child(dir, &name, false)?;
     let before = file.metadata().map_err(|e| e.to_string())?;
@@ -458,7 +621,32 @@ fn load_store_from_root(
             return Err("trust-store directory changed during read".into());
         }
     }
-    parse_store(&bytes)
+    let store = parse_store(&bytes)?;
+    if let Some(anchor) = read_generation_anchor(dir, uid, gid)? {
+        let (generation, digest) = parse_generation_anchor(&anchor)?;
+        let actual_digest: [u8; 32] = Sha256::digest(&bytes).into();
+        if generation != store.generation || digest != actual_digest {
+            return Err("TRUST_GENERATION_INCONSISTENT: store generation or digest differs from local history".into());
+        }
+    }
+    ensure_settled_trust_directory(dir)?;
+    let final_store = file.metadata().map_err(|e| e.to_string())?;
+    let current_store = open_child(dir, &name, false)?
+        .metadata()
+        .map_err(|e| e.to_string())?;
+    if !same_metadata(&before, &final_store) || !same_metadata(&before, &current_store) {
+        return Err("trust-store file changed during final consistency check".into());
+    }
+    for (i, component) in components.iter().enumerate() {
+        let current = open_child(&dirs[i], component, true)?
+            .metadata()
+            .map_err(|e| e.to_string())?;
+        let held = dirs[i + 1].metadata().map_err(|e| e.to_string())?;
+        if !same_metadata(&snapshots[i], &held) || !same_metadata(&held, &current) {
+            return Err("trust-store directory changed during final consistency check".into());
+        }
+    }
+    Ok(store)
 }
 
 fn load_production_store() -> Result<TrustStore, String> {
@@ -504,7 +692,7 @@ pub fn verify_cli(
         return Err("artifact identity changed during provenance inspection".into());
     }
     let output = format!(
-        "Artifact digest: {}\nManifest syntax and canonical integrity: {}\nSignature verification (Ed25519): {}\nTrust anchor: {}\nTrust-store generation: {}\nPublisher identity: {}\nClaimed build identity: {}\nVerified build-origin evidence: {}\nProtected-origin policy: {}\nOrigin policy: {}\nP011 scope: {}\nP009 backend: NOT_VERIFIED\nP012 launch binding: PREVIEW ONLY (signature integration unavailable)\nExecution authorization: FALSE\n",
+        "Artifact digest: {}\nManifest syntax and canonical integrity: {}\nSignature verification (Ed25519): {}\nTrust anchor: {}\nTrust-store generation: {}\nRollback protection: ROLLBACK_PROTECTION_UNVERIFIED\nPublisher identity: {}\nClaimed build identity: {}\nVerified build-origin evidence: {}\nProtected-origin policy: {}\nOrigin policy: {}\nP011 scope: {}\nP009 backend: NOT_VERIFIED\nP012 launch binding: PREVIEW ONLY (signature integration unavailable)\nExecution authorization: FALSE\n",
         if report.artifact_digest { "MATCH" } else { "MISMATCH" },
         if report.document_integrity { "VALID" } else { "INVALID" },
         report.signature_validity,
@@ -904,9 +1092,62 @@ mod tests {
             load_store_from_root(rootfd, &[component], meta.uid(), meta.gid())
         };
         assert_eq!(read(&name).unwrap().generation, 1);
+        let store_bytes = std::fs::read(&store).unwrap();
+        let store_hash = Sha256::digest(&store_bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let generation = dir.join("generation.v1");
+        std::fs::write(
+            &generation,
+            format!(
+                "ios-unsandboxed-trust-generation\nschema_version=1\ngeneration=1\nstore_sha256={store_hash}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&generation, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read(&name).unwrap().generation, 1);
+        std::fs::write(
+            &store,
+            b"ios-unsandboxed-trust-store\nschema_version=1\ngeneration=2\nkey_count=0\n",
+        )
+        .unwrap();
+        assert!(read(&name)
+            .unwrap_err()
+            .contains("TRUST_GENERATION_INCONSISTENT"));
+        std::fs::write(&store, &store_bytes).unwrap();
+        let transaction = dir.join("transaction.v1");
+        std::fs::write(&transaction, b"corrupt\n").unwrap();
+        std::fs::set_permissions(&transaction, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read(&name)
+            .unwrap_err()
+            .contains("TRUST_TRANSACTION_PENDING"));
+        std::fs::remove_file(&transaction).unwrap();
+        let stage = dir.join("stage.v1");
+        std::fs::write(
+            &stage,
+            b"ios-unsandboxed-trust-store\nschema_version=1\ngeneration=2\nkey_count=0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read(&name)
+            .unwrap_err()
+            .contains("TRUST_TRANSACTION_PENDING"));
+        std::fs::remove_file(stage).unwrap();
+        let foreign = dir.join("recovery-notes.txt");
+        std::fs::write(&foreign, b"administrator evidence\n").unwrap();
+        assert!(read(&name)
+            .unwrap_err()
+            .contains("TRUST_TRANSACTION_PENDING"));
+        std::fs::remove_file(foreign).unwrap();
         let alias = root.join("alias");
         symlink(&dir, &alias).unwrap();
         assert!(read(&std::ffi::CString::new("alias").unwrap()).is_err());
+        symlink("missing-target", &transaction).unwrap();
+        assert!(read(&name)
+            .unwrap_err()
+            .contains("TRUST_TRANSACTION_PENDING"));
+        std::fs::remove_file(&transaction).unwrap();
         let hard = root.join("hard");
         std::fs::hard_link(&store, &hard).unwrap();
         assert!(read(&name).is_err());
@@ -914,6 +1155,7 @@ mod tests {
         std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read(&name).is_err());
         std::fs::remove_file(alias).unwrap();
+        std::fs::remove_file(generation).unwrap();
         std::fs::remove_file(store).unwrap();
         std::fs::remove_dir(dir).unwrap();
         std::fs::remove_dir(root).unwrap();

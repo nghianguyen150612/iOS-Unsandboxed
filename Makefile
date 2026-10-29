@@ -14,10 +14,10 @@ NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu
 PLANNER_SOURCE := native/src/iu_execution_planner.c
 P012_SOURCES := native/src/iu_artifact_provenance.c native/src/iu_launch_binding.c native/src/iu_policy_store.c
 LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
-POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c native/src/iu_trust_store.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
+POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test trust-provider-test trust-format-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -67,6 +67,7 @@ test: host-build
 	$(MAKE) trust-provider-test
 	$(MAKE) trust-format-test
 	$(MAKE) trust-manager-test
+	$(MAKE) trust-recovery-test
 	$(MAKE) origin-policy-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
@@ -182,9 +183,9 @@ trust-provider-test:
 
 trust-format-test:
 	mkdir -p build/host
-	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/trust/trust-store-test.c native/src/iu_trust_store.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) -o build/host/trust-store-test
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/trust/trust-store-test.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) -o build/host/trust-store-test
 	python3 tests/trust/trust-format-roundtrip.py build/host/trust-store-test
-	@if $(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie $(NATIVE_INCLUDES) tests/trust/trust-store-test.c native/src/iu_trust_store.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) -o build/host/trust-store-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/trust/trust-format-roundtrip.py build/host/trust-store-sanitized-test; else echo 'Trust format sanitizers unavailable'; fi
+	@if $(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie $(NATIVE_INCLUDES) tests/trust/trust-store-test.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) -o build/host/trust-store-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/trust/trust-format-roundtrip.py build/host/trust-store-sanitized-test; else echo 'Trust format sanitizers unavailable'; fi
 
 origin-policy-test:
 	cargo test --locked --workspace provenance::tests::signed_claims_are_authenticated_but_origin_remains_unverified
@@ -193,3 +194,9 @@ origin-policy-test:
 .PHONY: trust-manager-test
 trust-manager-test: host-build
 	python3 tests/trust/trust-manager-test.py $(HOST_INSTALLER_HELPER)
+
+trust-recovery-test: host-build
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/trust/trust-transaction-test.c native/src/iu_trust_transaction.c -o build/host/trust-transaction-test
+	./build/host/trust-transaction-test
+	python3 tests/trust/trust-recovery-test.py $(HOST_INSTALLER_HELPER)
+	@if $(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_INSTALLER_TESTING $(NATIVE_INCLUDES) native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) -o build/host/installer-helper-sanitized >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/trust/trust-recovery-test.py build/host/installer-helper-sanitized; else echo 'Trust recovery sanitizers unavailable; strict C17 recovery fixtures completed.'; fi
