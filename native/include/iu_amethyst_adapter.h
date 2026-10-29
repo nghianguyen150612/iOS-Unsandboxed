@@ -5,6 +5,7 @@
 #include "iu_policy.h"
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define IU_AME_ADAPTER_ABI_VERSION UINT32_C(1)
 #define IU_AME_SOURCE_REVISION "61ce86d7d3f00e5395f4d42bebda0e5dce04946a"
@@ -235,6 +236,8 @@ int32_t iu_ame_macho_inspect_v1(const char *path, struct iu_ame_macho_result_v1 
 int32_t iu_ame_macho_inspect_fd_v1(int fd, struct iu_ame_macho_result_v1 *result);
 /* Complete bounded SHA-256 of a regular, single-link file on a borrowed fd. */
 int32_t iu_ame_sha256_fd_v1(int fd, uint8_t digest[IU_AME_SHA256_SIZE]);
+/* Hash a bounded in-memory byte sequence using the same SHA-256 implementation. */
+int32_t iu_ame_sha256_bytes_v1(const uint8_t *bytes, size_t length, uint8_t digest[IU_AME_SHA256_SIZE]);
 const char *iu_ame_compatibility_name_v1(uint32_t compatibility);
 const char *iu_ame_macho_state_name_v1(uint32_t state);
 

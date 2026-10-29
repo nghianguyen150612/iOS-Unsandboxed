@@ -262,6 +262,7 @@ fn parse_store(bytes: &[u8]) -> Result<TrustStore, String> {
         generation,
         keys: BTreeMap::new(),
     };
+    let mut previous_id: Option<&str> = None;
     for (i, line) in lines[4..].iter().enumerate() {
         let prefix = format!("key_{i}=");
         let fields: Vec<&str> = line
@@ -289,6 +290,10 @@ fn parse_store(bytes: &[u8]) -> Result<TrustStore, String> {
         if fields[0] != derived_id {
             return Err("key ID does not match public key".into());
         }
+        if previous_id.is_some_and(|previous| previous >= fields[0]) {
+            return Err("trust-store key IDs are not strictly ordered".into());
+        }
+        previous_id = Some(fields[0]);
         if store
             .keys
             .insert(
@@ -621,6 +626,48 @@ fn verify_manifest(
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    #[test]
+    fn trust_format_parity_fixtures() {
+        use std::fmt::Write;
+        let Some(root) = std::env::var_os("IU_TRUST_FORMAT_FIXTURES") else {
+            return;
+        };
+        for item in std::fs::read_dir(root).unwrap() {
+            let path = item.unwrap().path();
+            let extension = path.extension().and_then(|s| s.to_str());
+            if !matches!(extension, Some("valid" | "invalid")) {
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let parsed = parse_store(&bytes);
+            if extension == Some("invalid") {
+                assert!(parsed.is_err(), "{:?}", path);
+                continue;
+            }
+            let store = parsed.unwrap();
+            let mut encoded = format!(
+                "ios-unsandboxed-trust-store\nschema_version=1\ngeneration={}\nkey_count={}\n",
+                store.generation,
+                store.keys.len()
+            );
+            for (index, (id, key)) in store.keys.iter().enumerate() {
+                let public = key
+                    .public_key
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>();
+                writeln!(
+                    encoded,
+                    "key_{index}={id}|{}|{public}|publisher|{}|{}",
+                    key.algorithm, key.publisher, key.state
+                )
+                .unwrap();
+            }
+            assert_eq!(encoded.as_bytes(), bytes);
+            std::fs::write(path.with_extension("rust"), encoded).unwrap();
+        }
+    }
 
     fn fixture() -> (Vec<u8>, ArtifactIdentity, TrustStore) {
         let signing = SigningKey::from_bytes(&[0x42; 32]); // Deterministic test fixture only.

@@ -14,6 +14,6 @@ key_count=1
 key_0=<key-id>|ed25519|<64-lowercase-hex-public-key>|publisher|<publisher-id>|active
 ```
 
-Records are ordered by contiguous index. Key ID is the first 16 bytes of SHA-256(public key), lowercase hex. `active` and `revoked` are explicit states. The only authority scope implemented is the exact publisher identity in the record. A publisher key cannot establish source/build origin or claim an artifact is non-protected.
+Records have contiguous indexes and strictly ascending key IDs. Key ID is the first 16 bytes of SHA-256(public key), lowercase hex. Stores previously accepted in a different order now fail closed and require deliberate administrator review before reordering. `active` and `revoked` are explicit states. The only authority scope implemented is the exact publisher identity in the record. A publisher key cannot establish source/build origin or claim an artifact is non-protected.
 
 This increment does not provide add/revoke/rotation commands or atomic writes. Do not create a production trust file by copying arbitrary key material. Installing an anchor must be an administrator-reviewed trust-policy change. Rotation requires provisioning a separately reviewed key and explicit revocation of the old key; there is no automatic rollover. `generation` provides a version field, not rollback protection: a monotonic external state provider is unavailable, so privileged filesystem rollback is undetectable.
