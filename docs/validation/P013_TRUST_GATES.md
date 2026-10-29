@@ -5,7 +5,7 @@
 - Rust verifier: Ed25519 via `ed25519-dalek` 2.x; fixed algorithm and strict canonical signature length.
 - Artifact binding: P010 SHA-256, size, architecture, and Mach-O type.
 - Trust reader: strict root ownership/mode, no final symlink, single-link file, bounded 64-key schema, explicit IDs and active/revoked state.
-- Trust mutation manager: NOT IMPLEMENTED.
+- Trust mutation manager: add/revoke/rotate implemented in P013B-2; crash recovery deferred to P013B-3.
 - Independent build-origin attestation: NOT AVAILABLE; always `ORIGIN_UNVERIFIED`.
 - Authoritative protected-origin classification: NOT AVAILABLE; always `UNKNOWN`.
 - P012 C verifier integration: NOT IMPLEMENTED; existing v1 remains fail closed.

@@ -16,4 +16,8 @@ key_0=<key-id>|ed25519|<64-lowercase-hex-public-key>|publisher|<publisher-id>|ac
 
 Records have contiguous indexes and strictly ascending key IDs. Key ID is the first 16 bytes of SHA-256(public key), lowercase hex. Stores previously accepted in a different order now fail closed and require deliberate administrator review before reordering. `active` and `revoked` are explicit states. The only authority scope implemented is the exact publisher identity in the record. A publisher key cannot establish source/build origin or claim an artifact is non-protected.
 
-This increment does not provide add/revoke/rotation commands or atomic writes. Do not create a production trust file by copying arbitrary key material. Installing an anchor must be an administrator-reviewed trust-policy change. Rotation requires provisioning a separately reviewed key and explicit revocation of the old key; there is no automatic rollover. `generation` provides a version field, not rollback protection: a monotonic external state provider is unavailable, so privileged filesystem rollback is undetectable.
+Add/revoke/rotation management is implemented in P013B-2 with atomic store replacement. Crash reconciliation and an independent monotonic generation source remain unavailable. A privileged filesystem rollback of all local evidence remains undetectable.
+
+## P013B-2 manager
+
+`manager.sh trust status|list|plan` inspects without writing. Use `trust add-key FILE --publisher ID`, `trust revoke-key ID`, or `trust rotate-key OLD_ID FILE --publisher ID`; append both `--apply --confirm` to persist. FILE contains 64 lowercase public-key hex digits and LF. Commands without both flags only plan. Repeated revocation is a no-op. Rotation requires the old publisher identity and commits revocation plus enrollment in a single generation. Atomic replacement is implemented; crash recovery journals remain deferred to P013B-3.

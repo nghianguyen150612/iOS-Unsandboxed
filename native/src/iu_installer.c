@@ -4,6 +4,7 @@
 #include "iu_service_lifecycle.h"
 #include "iu_policy_store.h"
 #include "iu_policy_manager.h"
+#include "iu_trust_manager.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -325,10 +326,11 @@ static int fsync_dir(int fd)
 
 static int open_fixture_subdir(int rootfd,const char *path)
 {
-    char copy[PATH_MAX],*save=NULL,*part; int fd=dup(rootfd),next;
+    char copy[PATH_MAX],*save=NULL,*part; struct stat owner,child; int fd=dup(rootfd),next;
     if(fd<0||strlen(path)>=sizeof(copy)){if(fd>=0)close(fd);return -1;}
+    if(fstat(rootfd,&owner)!=0){close(fd);return -1;}
     strcpy(copy,path);part=strtok_r(copy,"/",&save);
-    while(part){next=openat(fd,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);close(fd);if(next<0)return -1;fd=next;part=strtok_r(NULL,"/",&save);}
+    while(part){next=openat(fd,part,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);close(fd);if(next<0)return -1;if(fstat(next,&child)||child.st_uid!=owner.st_uid||child.st_gid!=owner.st_gid||(child.st_mode&0022)){close(next);errno=EPERM;return -1;}fd=next;part=strtok_r(NULL,"/",&save);}
     return fd;
 }
 static int open_base_dirs(struct context *ctx)
@@ -344,7 +346,12 @@ static int open_base_dirs(struct context *ctx)
         ctx->dataparentfd=ctx->varlibfd;
     }else{
         ctx->rootfd=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);
-        ctx->varlibfd=open("/var/lib",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+        /* iOS /var is an OS symlink; traverse its fixed backing path without following it. */
+#if defined(__APPLE__)
+        ctx->varlibfd=open_fixture_subdir(ctx->rootfd,"private/var/lib");
+#else
+        ctx->varlibfd=open_fixture_subdir(ctx->rootfd,"var/lib");
+#endif
         ctx->bindirfd=open("/usr/local/bin",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         usrfd=open("/usr",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         localfd=open("/usr/local",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
@@ -1214,7 +1221,7 @@ static int cmd_policy(struct context *ctx,const char *action,const char *path,in
     for(unsigned i=0;i<s.count;i++)if(iu_policy_scope_inspect(ctx->rootfd,s.scopes[i],ctx->uid,ctx->gid,NULL,&dev,&ino,0)!=0 || dev!=s.devices[i] || ino!=s.inodes[i])return bad("configured scope is unsafe or replaced; no policy change");
     if(!apply){puts("Policy plan only; no changes. Use --apply --confirm to commit.");return 0;}
 #if defined(IU_INSTALLER_TESTING)
-    if(test_interrupt_at && !strcmp(test_interrupt_at,"policy-before-write"))_exit(86);
+    if(test_interrupt_at && !strcmp(test_interrupt_at,"trust-before-rename")&&strcmp(test_interrupt_at,"policy-before-write"))_exit(86);
 #endif
     if(write_policy_atomic(ctx,encoded,length,&original)!=0)return bad("policy write failed; prior file or a complete new file is preserved");
     if(iu_policy_store_load(ctx->datafd,ctx->uid,ctx->gid,&verify)!=0||verify.state!=IU_STORE_VALID||verify.count!=s.count)return bad("written policy did not verify; inspect before further changes");
@@ -1387,13 +1394,14 @@ static int cmd_uninstall(struct context *ctx)
     return 0;
 }
 
+static const char *trust_second, *trust_publisher;
 static int parse_arguments(int argc,char **argv,const char **command,const char **service_action,const char **package_path,const char **test_root,const char **policy_path,int *apply,int *confirmed,int *acknowledge)
 {
     *command=NULL;*service_action=NULL;*package_path=NULL;*test_root=NULL;*policy_path=NULL;*apply=0;*confirmed=0;*acknowledge=0;
     if(argc<2)return -1;
     *command=argv[1];
     int first=2;
-    if(strcmp(*command,"service")==0||strcmp(*command,"policy")==0){if(argc<3)return -1;*service_action=argv[2];first=3;}
+    if(strcmp(*command,"service")==0||strcmp(*command,"policy")==0||strcmp(*command,"trust")==0){if(argc<3)return -1;*service_action=argv[2];first=3;}
     for(int i=first;i<argc;++i){
         if(strcmp(argv[i],"--apply")==0){if(*apply)return -1;*apply=1;continue;}
         if(strcmp(argv[i],"--confirm")==0){if(*confirmed)return -1;*confirmed=1;continue;}
@@ -1404,6 +1412,11 @@ static int parse_arguments(int argc,char **argv,const char **command,const char 
         if(strcmp(argv[i],"--test-interrupt-at")==0&&i+1<argc){if(test_interrupt_at)return -1;test_interrupt_at=argv[++i];continue;}
 #endif
         if(strcmp(*command,"policy")==0 && argv[i][0]!='-' && !*policy_path){*policy_path=argv[i];continue;}
+        if(!strcmp(*command,"trust")){
+            if(!strcmp(argv[i],"--publisher")&&i+1<argc&&!trust_publisher){trust_publisher=argv[++i];continue;}
+            if(argv[i][0]!='-'&&!*policy_path){*policy_path=argv[i];continue;}
+            if(argv[i][0]!='-'&&!trust_second){trust_second=argv[i];continue;}
+        }
         return -1;
     }
     return 0;
@@ -1444,6 +1457,7 @@ static void print_help(void)
          "  rollback   Restore the last verified backup; changes require --apply\n"
          "  uninstall  Remove only verified project-owned files; requires --apply\n"
          "  recover    Restore the journal's verified pre-transaction generation\n\n"
+         "  trust help|status|list|plan|add-key|revoke-key|rotate-key\n"
          "  policy help|status|plan|list|add-directory|remove-directory|reset|preview\n"
          "  service plan|status|register|start|stop|unregister|recover\n"
          "             Read-only by default; changes require --apply --confirm\n"
@@ -1456,19 +1470,27 @@ int main(int argc,char **argv)
 {
     const char *command,*service_action,*package_path,*test_root,*policy_path;int apply,confirmed,acknowledge,result=0,mutating=0,need_package=0,require_root=1;struct context ctx;
     if(parse_arguments(argc,argv,&command,&service_action,&package_path,&test_root,&policy_path,&apply,&confirmed,&acknowledge)!=0){print_help();return 2;}
-    if(strcmp(command,"service")!=0&&strcmp(command,"policy")!=0&&(confirmed||acknowledge)){fail("service confirmation flags are valid only for service commands");return 2;}
+    if(strcmp(command,"service")!=0&&strcmp(command,"policy")!=0&&strcmp(command,"trust")!=0&&(confirmed||acknowledge)){fail("service confirmation flags are valid only for service commands");return 2;}
 #if defined(IU_INSTALLER_TESTING)
     if(test_interrupt_at!=NULL){
         if(test_root==NULL||!apply){fail("test interruption requires an explicit --test-root and --apply");return 2;}
-        if(strcmp(test_interrupt_at,"staging")&&strcmp(test_interrupt_at,"prepared")&&strcmp(test_interrupt_at,"policy-before-write")&&strcmp(test_interrupt_at,"policy-before-rename")&&strncmp(test_interrupt_at,"commit:",7)&&strncmp(test_interrupt_at,"rollback:",9)){fail("unknown test interruption phase");return 2;}
+        if(strcmp(test_interrupt_at,"staging")&&strcmp(test_interrupt_at,"prepared")&&strcmp(test_interrupt_at,"trust-before-rename")&&strcmp(test_interrupt_at,"policy-before-write")&&strcmp(test_interrupt_at,"policy-before-rename")&&strncmp(test_interrupt_at,"commit:",7)&&strncmp(test_interrupt_at,"rollback:",9)){fail("unknown test interruption phase");return 2;}
     }
 #endif
     if(strcmp(command,"help")==0){if(argc!=2)return 2;print_help();return 0;}
     if(strcmp(command,"version")==0){if(argc!=2)return 2;puts("iOS-Unsandboxed 0.1.0\ninstaller manager format 1\npackage format 1\ninstall manifest schema 1\nstate schema 1 (execution_activation=disabled)");return 0;}
     if(!strcmp(command,"policy") && !strcmp(service_action,"help")){if(argc!=3)return 2;policy_help();return 0;}
+    if(!strcmp(command,"trust")&&!strcmp(service_action,"help")){if(argc!=3)return 2;puts("trust status|list|plan|add-key FILE --publisher ID|revoke-key ID|rotate-key ID FILE --publisher ID [--apply --confirm]");return 0;}
     if(strcmp(command,"plan")==0){if(!package_path||apply){fail("plan requires --package and is always read-only");return 2;}need_package=1;}
     else if(strcmp(command,"install")==0||strcmp(command,"upgrade")==0){if(!package_path){fail("install and upgrade require --package DIR");return 2;}need_package=1;mutating=apply;}
     else if(strcmp(command,"status")==0){if(package_path||apply)return 2;}
+    else if(!strcmp(command,"trust")){
+        int add=!strcmp(service_action,"add-key"),rev=!strcmp(service_action,"revoke-key"),rot=!strcmp(service_action,"rotate-key");
+        if(package_path||acknowledge)return 2;
+        if(add||rev||rot){if(!policy_path || (rot!= (trust_second!=NULL)) || ((add||rot)!=(trust_publisher!=NULL)))return 2;}
+        else if((strcmp(service_action,"status")&&strcmp(service_action,"list")&&strcmp(service_action,"plan"))||policy_path||trust_second||trust_publisher||apply||confirmed)return 2;
+        mutating=apply&&confirmed;require_root=mutating;
+    }
     else if(strcmp(command,"policy")==0){int needs_path=!strcmp(service_action,"add-directory")||!strcmp(service_action,"remove-directory")||!strcmp(service_action,"preview");
         int changes=!strcmp(service_action,"add-directory")||!strcmp(service_action,"remove-directory")||!strcmp(service_action,"reset");
         if(package_path||acknowledge||(!needs_path && policy_path)||(needs_path && !policy_path))return 2;
@@ -1486,6 +1508,17 @@ int main(int argc,char **argv)
     if(init_context(&ctx,test_root,require_root)!=0)return 2;
     if(strcmp(command,"plan")==0){struct manifest m;int installed=check_existing_install(&ctx,&m);if(installed<0)result=bad("current installation is modified, foreign, or unsupported");else result=cmd_plan(&ctx,installed==0?"upgrade":"install",package_path);}
     else if(strcmp(command,"status")==0)result=cmd_status(&ctx);
+    else if(!strcmp(command,"trust")){
+        struct manifest manifest;
+        if(mutating&&(check_production_platform(&ctx)||check_production_permissions(&ctx)||acquire_lock(&ctx)||check_no_transaction(&ctx)||check_existing_install(&ctx,&manifest)))result=3;
+        else result=iu_trust_manager_run(ctx.datafd,ctx.uid,ctx.gid,service_action,policy_path,trust_second,trust_publisher,mutating,
+#if defined(IU_INSTALLER_TESTING)
+            test_interrupt_at&&!strcmp(test_interrupt_at,"trust-before-rename")
+#else
+            0
+#endif
+        );
+    }
     else if(strcmp(command,"policy")==0)result=cmd_policy(&ctx,service_action,policy_path,apply,confirmed);
     else if(strcmp(command,"service")==0){enum iu_service_action action;struct manifest manifest;int installed=check_existing_install(&ctx,&manifest);int daemon_valid=0,template_valid=0;
         if(strcmp(service_action,"plan")==0)action=IU_SERVICE_PLAN;else if(strcmp(service_action,"status")==0)action=IU_SERVICE_STATUS;
