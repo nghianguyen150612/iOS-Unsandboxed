@@ -97,7 +97,7 @@ int32_t iu_launch_binding_preview_fd_v1(int fd,const struct iu_launch_request_v1
     if(!q || q->abi_version!=IU_LAUNCH_BINDING_ABI_VERSION || q->struct_size!=sizeof(*q) || q->operation!=IU_LAUNCH_OPERATION_PREVIEW || q->path_length==0 || q->path_length>=sizeof(q->path) || q->path[q->path_length]!='\0' || memchr(q->path,'\0',q->path_length) || q->evidence_length>IU_PROVENANCE_EVIDENCE_MAX || (!q->evidence && q->evidence_length)) return -1;
     r->operation=q->operation;memcpy(r->requested_path,q->path,(size_t)q->path_length+1);
     if(fstat(fd,&s)!=0 || !S_ISREG(s.st_mode) || s.st_nlink!=1 || s.st_size<0 || (uint64_t)s.st_size>IU_AME_MAX_FILE_SIZE) return -2;
-    if(iu_execution_plan_create_v1(q->path,&r->artifact)!=0 || !matches(&s,&r->artifact))return -2;
+    if(iu_execution_plan_create_fd_v2(fd,q->path,&r->artifact)!=0 || !matches(&s,&r->artifact))return -2;
     if(iu_ame_macho_inspect_fd_v1(fd,&macho)!=0 || iu_ame_sha256_fd_v1(fd,hash)!=0 || fstat(fd,&s)!=0 || !matches(&s,&r->artifact) || memcmp(hash,r->artifact.sha256,32) || macho.state!=r->artifact.macho_state || macho.architecture!=r->artifact.architecture || macho.macho_filetype!=r->artifact.macho_filetype || iu_execution_plan_revalidate_v1(&r->artifact)!=0) return -2;
     r->evidence_length=q->evidence_length;if(q->evidence_length)memcpy(r->evidence,q->evidence,q->evidence_length);
     if(iu_provenance_verify_v1(r->evidence,r->evidence_length,&r->artifact,&r->provenance)!=0)return -1;
@@ -134,6 +134,103 @@ int32_t iu_launch_binding_path_summary_v1(const char *path,struct iu_launch_cli_
     fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);if(fd<0)return -2;
     rc=iu_launch_binding_preview_fd_v1(fd,&q,&r);close(fd);if(rc)return rc;
     s->scope_state=r.scope_state;s->store_state=r.store_state;s->provenance_state=r.provenance.state;s->decision=r.decision;s->boundary_status=r.boundary_status;s->operational_authorization=r.operational_authorization;s->device=r.artifact.device_number;s->inode=r.artifact.inode;memcpy(s->sha256,r.artifact.sha256,32);return 0;
+}
+int32_t iu_launch_binding_preview_fd_summary_v2(int borrowed_fd,const char *requested_path,
+                                                  struct iu_launch_cli_summary_v2 *summary) {
+    struct iu_launch_request_v1 request;
+    struct iu_launch_result_v1 preview;
+    size_t path_length;
+    int32_t rc;
+    if(summary==NULL || summary->abi_version!=IU_LAUNCH_SUMMARY_ABI_VERSION_V2 ||
+       summary->struct_size!=sizeof(*summary) || requested_path==NULL) return -1;
+    path_length=strnlen(requested_path,IU_POLICY_PATH_CAPACITY);
+    if(path_length==0 || path_length>=IU_POLICY_PATH_CAPACITY) return -1;
+    memset(summary,0,sizeof(*summary));
+    summary->abi_version=IU_LAUNCH_SUMMARY_ABI_VERSION_V2;
+    summary->struct_size=(uint32_t)sizeof(*summary);
+    memset(&request,0,sizeof(request));
+    request.abi_version=IU_LAUNCH_BINDING_ABI_VERSION;
+    request.struct_size=(uint32_t)sizeof(request);
+    request.operation=IU_LAUNCH_OPERATION_PREVIEW;
+    request.path_length=(uint32_t)path_length;
+    memcpy(request.path,requested_path,path_length+1U);
+    /* P012 v1 owns descriptor inspection, Mach-O parsing, policy scope
+     * evaluation, and descriptor/path revalidation. Empty evidence avoids
+     * treating the legacy C verifier as P013 authentication. */
+    rc=iu_launch_binding_preview_fd_v1(borrowed_fd,&request,&preview);
+    if(rc!=0) return rc;
+    if(preview.abi_version!=IU_LAUNCH_BINDING_ABI_VERSION ||
+       preview.struct_size!=sizeof(preview) ||
+       preview.operation!=IU_LAUNCH_OPERATION_PREVIEW ||
+       preview.boundary_status!=IU_LAUNCH_BOUNDARY_NOT_IMPLEMENTED ||
+       preview.operational_authorization!=0 ||
+       preview.artifact.abi_version!=IU_EXECUTION_PLAN_ABI_VERSION ||
+       preview.artifact.struct_size!=sizeof(preview.artifact) ||
+       preview.artifact.inspection_status!=IU_EXECUTION_INSPECTION_COMPLETE ||
+       preview.artifact.identity_status!=IU_EXECUTION_IDENTITY_RECORDED ||
+       preview.artifact.policy_outcome!=IU_POLICY_DENY_DISABLED ||
+       preview.artifact.link_count!=1 ||
+       preview.scope_state>IU_LAUNCH_SCOPE_MATCH ||
+       preview.store_state>IU_STORE_IO_ERROR ||
+       preview.hypothetical_p003_outcome>IU_POLICY_DENY_INTERNAL_ERROR ||
+       preview.decision<IU_LAUNCH_POLICY_DISABLED ||
+       preview.decision>IU_LAUNCH_UNSUPPORTED_ARTIFACT ||
+       preview.requested_path[path_length]!='\0' ||
+       memcmp(preview.requested_path,requested_path,path_length)!=0) return -1;
+    summary->scope_state=preview.scope_state;
+    summary->store_state=preview.store_state;
+    summary->hypothetical_p003_outcome=preview.hypothetical_p003_outcome;
+    summary->decision=preview.decision;
+    summary->boundary_status=preview.boundary_status;
+    summary->operational_authorization=preview.operational_authorization;
+    summary->scope_device=preview.scope_device;
+    summary->scope_inode=preview.scope_inode;
+    summary->store_device=preview.store_device;
+    summary->store_inode=preview.store_inode;
+    memcpy(summary->store_sha256,preview.store_sha256,sizeof(summary->store_sha256));
+    memcpy(summary->scope_path,preview.scope_path,sizeof(summary->scope_path));
+    memcpy(summary->requested_path,preview.requested_path,sizeof(summary->requested_path));
+    summary->artifact=preview.artifact;
+    return 0;
+}
+
+int32_t iu_launch_binding_revalidate_fd_summary_v2(int borrowed_fd,
+                                                    const struct iu_launch_cli_summary_v2 *previous) {
+    struct iu_launch_result_v1 reconstructed;
+    if(previous==NULL || previous->abi_version!=IU_LAUNCH_SUMMARY_ABI_VERSION_V2 ||
+       previous->struct_size!=sizeof(*previous) ||
+       previous->scope_state>IU_LAUNCH_SCOPE_MATCH ||
+       previous->store_state>IU_STORE_IO_ERROR ||
+       previous->hypothetical_p003_outcome>IU_POLICY_DENY_INTERNAL_ERROR ||
+       previous->decision<IU_LAUNCH_POLICY_DISABLED ||
+       previous->decision>IU_LAUNCH_UNSUPPORTED_ARTIFACT ||
+       previous->boundary_status!=IU_LAUNCH_BOUNDARY_NOT_IMPLEMENTED ||
+       previous->operational_authorization!=0 ||
+       !memchr(previous->scope_path,'\0',sizeof(previous->scope_path)) ||
+       !memchr(previous->requested_path,'\0',sizeof(previous->requested_path))) return -1;
+    memset(&reconstructed,0,sizeof(reconstructed));
+    reconstructed.abi_version=IU_LAUNCH_BINDING_ABI_VERSION;
+    reconstructed.struct_size=(uint32_t)sizeof(reconstructed);
+    reconstructed.operation=IU_LAUNCH_OPERATION_PREVIEW;
+    reconstructed.scope_state=previous->scope_state;
+    reconstructed.store_state=previous->store_state;
+    reconstructed.hypothetical_p003_outcome=previous->hypothetical_p003_outcome;
+    reconstructed.decision=previous->decision;
+    reconstructed.boundary_status=previous->boundary_status;
+    reconstructed.operational_authorization=0;
+    reconstructed.scope_device=previous->scope_device;
+    reconstructed.scope_inode=previous->scope_inode;
+    reconstructed.store_device=previous->store_device;
+    reconstructed.store_inode=previous->store_inode;
+    memcpy(reconstructed.store_sha256,previous->store_sha256,sizeof(reconstructed.store_sha256));
+    memcpy(reconstructed.scope_path,previous->scope_path,sizeof(reconstructed.scope_path));
+    memcpy(reconstructed.requested_path,previous->requested_path,sizeof(reconstructed.requested_path));
+    reconstructed.artifact=previous->artifact;
+    /* The v2 summary is created with empty C evidence. Recreate only that
+     * non-authenticated v1 diagnostic so the established P012 revalidator can
+     * compare the descriptor, pathname, and current scope snapshot. */
+    if(iu_provenance_verify_v1(NULL,0,&reconstructed.artifact,&reconstructed.provenance)!=0) return -1;
+    return iu_launch_binding_revalidate_fd_v1(borrowed_fd,&reconstructed,NULL,0);
 }
 #ifdef IU_LAUNCH_BINDING_TESTING
 int32_t iu_launch_binding_test_scope_v1(int rootfd,int datafd,uint32_t uid,uint32_t gid,const char *path,struct iu_launch_result_v1 *r){if(!path||!r)return -1;scope(rootfd,datafd,(uid_t)uid,(gid_t)gid,path,r);decide(r);return 0;}

@@ -31,5 +31,12 @@ int main(int argc,char **argv){
     assert(iu_launch_binding_test_scope_v1(root,datadir,getuid(),getgid(),"/opt/ios-unsandboxed-scopes/other/app",&r)==0);assert(r.scope_state==IU_LAUNCH_SCOPE_NOT_CONFIGURED);
     store.inodes[0]++;assert(iu_policy_store_encode(&store,encoded,sizeof(encoded),&len)==0);storefd=openat(datadir,"execution-policy",O_TRUNC|O_WRONLY);assert(storefd>=0);assert(write(storefd,encoded,len)==(ssize_t)len);close(storefd);
     assert(iu_launch_binding_test_scope_v1(root,datadir,getuid(),getgid(),logical,&r)==0);assert(r.scope_state==IU_LAUNCH_SCOPE_UNVERIFIED);
-    close(fd);close(datadir);close(root);puts("post-enrollment copy and protected fixture scope: PASS");return 0;
+    store.inodes[0]=ino;assert(iu_policy_store_encode(&store,encoded,sizeof(encoded),&len)==0);storefd=openat(datadir,"execution-policy",O_TRUNC|O_WRONLY);assert(storefd>=0);assert(write(storefd,encoded,len)==(ssize_t)len);close(storefd);
+    assert(iu_launch_binding_test_scope_v1(root,datadir,getuid(),getgid(),logical,&r)==0);assert(r.scope_state==IU_LAUNCH_SCOPE_MATCH);
+    assert(snprintf(physical,sizeof(physical),"%s%s",argv[1],logical)>0);assert(unlink(physical)==0);close(fd);
+    { char enrolled[1024],retired[1024];assert(snprintf(enrolled,sizeof(enrolled),"%s/opt/ios-unsandboxed-scopes/enrolled",argv[1])>0);assert(snprintf(retired,sizeof(retired),"%s/opt/ios-unsandboxed-scopes/retired",argv[1])>0);
+      assert(rename(enrolled,retired)==0);assert(iu_launch_binding_test_scope_v1(root,datadir,getuid(),getgid(),logical,&r)==0);assert(r.scope_state==IU_LAUNCH_SCOPE_UNVERIFIED);
+      assert(mkdir(enrolled,0700)==0);assert(iu_launch_binding_test_scope_v1(root,datadir,getuid(),getgid(),logical,&r)==0);assert(r.scope_state==IU_LAUNCH_SCOPE_UNVERIFIED);assert(rmdir(enrolled)==0);
+      assert(rename(retired,enrolled)==0); }
+    close(datadir);close(root);puts("post-enrollment copy, protected fixture, removed/replaced scope, and policy identity: PASS");return 0;
 }

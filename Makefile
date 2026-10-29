@@ -17,7 +17,7 @@ LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test authenticated-binding-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -29,6 +29,7 @@ help:
 	  'make policy-test  Run policy store and manager fixtures' \
 	  'make provenance-test Run evidence and trust-boundary fixtures' \
 	  'make launch-binding-test Run identity and scope fixtures' \
+	  'make authenticated-binding-test Run descriptor-bound authenticated preview fixtures' \
 	  'make trust-provider-test Run signed-manifest and trust-anchor fixtures' \
 	  'make origin-policy-test Run fail-closed origin-policy fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
@@ -64,6 +65,7 @@ test: host-build
 	$(MAKE) policy-test
 	$(MAKE) provenance-test
 	$(MAKE) launch-binding-test
+	$(MAKE) authenticated-binding-test
 	$(MAKE) trust-provider-test
 	$(MAKE) trust-format-test
 	$(MAKE) trust-manager-test
@@ -177,6 +179,20 @@ launch-binding-test:
 	python3 tests/launch-binding/fixtures.py build/host/launch-scope-test build/host/launch-binding-test
 	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_LAUNCH_BINDING_TESTING $(NATIVE_INCLUDES) tests/launch-binding/launch-binding-test.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/launch-binding-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/launch-binding/fixtures.py build/host/launch-binding-sanitized-test; else echo 'Launch binding sanitizers unavailable'; fi
 	@if [ -x target/debug/ios-unsandboxed ]; then python3 tests/launch-binding/cli-test.py; if nm target/debug/ios-unsandboxed | grep -q iu_provenance_test_verify; then echo 'test verifier leaked into CLI' >&2; exit 1; fi; fi
+
+authenticated-binding-test:
+	cargo test --locked --workspace authenticated_binding::tests::
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  tests/authenticated-binding/abi-test.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) \
+	  -o build/host/authenticated-binding-abi-test
+	python3 tests/authenticated-binding/abi-fixtures.py build/host/authenticated-binding-abi-test
+	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
+	  $(NATIVE_INCLUDES) tests/authenticated-binding/abi-test.c $(P012_SOURCES) $(NATIVE_SOURCES) \
+	  $(PLANNER_SOURCE) -o build/host/authenticated-binding-abi-sanitized-test >/dev/null 2>&1; then \
+	  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+	    python3 tests/authenticated-binding/abi-fixtures.py build/host/authenticated-binding-abi-sanitized-test; \
+	else echo 'Authenticated-binding sanitizers unavailable; strict C17 ABI fixture run completed.'; fi
 
 trust-provider-test:
 	cargo test --locked --workspace provenance::tests::

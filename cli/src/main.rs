@@ -3,6 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::process::ExitCode;
 
+mod authenticated_binding;
 mod ipc;
 mod planner;
 mod provenance;
@@ -18,6 +19,8 @@ Commands:\n\
   plan <binary>                  Preview provenance and launch binding (read-only)\n\
   provenance verify <manifest> <binary>\n\
                                  Verify signed evidence (read-only)\n\
+  provenance plan <manifest> <binary>\n\
+                                 Preview descriptor-bound authenticated provenance\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
   install <binary>               Install a binary (not implemented)\n\
@@ -42,6 +45,7 @@ enum Invocation {
     Inspect(OsString),
     Plan(OsString),
     ProvenanceVerify(OsString, OsString),
+    ProvenancePlan(OsString, OsString),
     ReservedCommand(&'static str),
 }
 
@@ -106,6 +110,14 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
                 args[2].clone(),
                 args[3].clone(),
             ))
+        }
+        "provenance"
+            if args.len() == 4
+                && args[1] == OsStr::new("plan")
+                && !args[2].is_empty()
+                && !args[3].is_empty() =>
+        {
+            Ok(Invocation::ProvenancePlan(args[2].clone(), args[3].clone()))
         }
         "install" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::ReservedCommand("install"))
@@ -175,6 +187,15 @@ fn main() -> ExitCode {
                     eprintln!("ios-unsandboxed: provenance inspection failed: {error}");
                     ExitCode::from(4)
                 }
+            }
+        }
+        Ok(Invocation::ProvenancePlan(manifest, artifact)) => {
+            let result = authenticated_binding::preview(std::path::Path::new(&manifest), &artifact);
+            print!("{}", result.render());
+            if result.diagnostic_success() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(4)
             }
         }
         Ok(Invocation::ReservedCommand(command)) => {
@@ -681,6 +702,13 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["provenance", "verify", "./manifest", "./binary"])),
             Ok(Invocation::ProvenanceVerify(
+                OsString::from("./manifest"),
+                OsString::from("./binary")
+            ))
+        );
+        assert_eq!(
+            parse_args(&args(&["provenance", "plan", "./manifest", "./binary"])),
+            Ok(Invocation::ProvenancePlan(
                 OsString::from("./manifest"),
                 OsString::from("./binary")
             ))

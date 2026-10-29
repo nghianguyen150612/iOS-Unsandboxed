@@ -15,7 +15,7 @@ use std::path::Path;
 const MANIFEST_MAX: usize = 8192;
 const STORE_MAX: usize = 16384;
 const KEY_MAX: usize = 64;
-const SIGNING_DOMAIN: &[u8] = b"ios-unsandboxed-provenance-v1\0";
+pub(crate) const SIGNING_DOMAIN: &[u8] = b"ios-unsandboxed-provenance-v1\0";
 const TRUST_FILE: &str = "store.v1";
 #[cfg(target_os = "macos")]
 const OPEN_SAFE_FLAGS: i32 = libc::O_NOFOLLOW | libc::O_CLOEXEC;
@@ -33,36 +33,117 @@ pub struct ArtifactIdentity {
 }
 
 #[derive(Debug, Clone)]
-struct Manifest {
-    signed: Vec<u8>,
-    digest: [u8; 32],
-    size: u64,
-    architecture: u32,
-    filetype: u32,
-    artifact_id: String,
-    repository: String,
-    revision: String,
-    workflow: String,
-    builder: String,
-    publisher: String,
-    algorithm: String,
-    key_id: String,
-    origin: String,
-    signature: [u8; 64],
+pub(crate) struct Manifest {
+    pub(crate) signed: Vec<u8>,
+    pub(crate) digest: [u8; 32],
+    pub(crate) size: u64,
+    pub(crate) architecture: u32,
+    pub(crate) filetype: u32,
+    pub(crate) artifact_id: String,
+    pub(crate) repository: String,
+    pub(crate) revision: String,
+    pub(crate) workflow: String,
+    pub(crate) builder: String,
+    pub(crate) publisher: String,
+    pub(crate) algorithm: String,
+    pub(crate) key_id: String,
+    pub(crate) origin: String,
+    pub(crate) signature: [u8; 64],
 }
 
 #[derive(Debug, Clone)]
-struct Anchor {
-    algorithm: String,
-    public_key: [u8; 32],
-    publisher: String,
-    state: String,
+pub(crate) struct Anchor {
+    pub(crate) algorithm: String,
+    pub(crate) public_key: [u8; 32],
+    pub(crate) publisher: String,
+    pub(crate) state: String,
 }
 
 #[derive(Debug, Clone, Default)]
-struct TrustStore {
-    generation: u64,
-    keys: BTreeMap<String, Anchor>,
+pub(crate) struct TrustStore {
+    pub(crate) generation: u64,
+    pub(crate) keys: BTreeMap<String, Anchor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GenerationMarkerStatus {
+    Consistent,
+    Missing,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TrustSnapshot {
+    pub(crate) store: TrustStore,
+    pub(crate) digest: [u8; 32],
+    pub(crate) generation_marker_status: GenerationMarkerStatus,
+}
+
+/// Typed failure classes for the authenticated provider. The older standalone
+/// verifier still renders these values as strings at its CLI boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TrustLoadError {
+    Pending(String),
+    GenerationInconsistent(String),
+    Unavailable(String),
+}
+
+impl TrustLoadError {
+    fn pending(detail: impl Into<String>) -> Self {
+        Self::Pending(detail.into())
+    }
+
+    fn generation_inconsistent(detail: impl Into<String>) -> Self {
+        Self::GenerationInconsistent(detail.into())
+    }
+}
+
+impl std::fmt::Display for TrustLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending(detail) => write!(f, "TRUST_TRANSACTION_PENDING: {detail}"),
+            Self::GenerationInconsistent(detail) => {
+                write!(f, "TRUST_GENERATION_INCONSISTENT: {detail}")
+            }
+            Self::Unavailable(detail) => f.write_str(detail),
+        }
+    }
+}
+
+impl std::error::Error for TrustLoadError {}
+
+impl From<String> for TrustLoadError {
+    fn from(detail: String) -> Self {
+        Self::Unavailable(detail)
+    }
+}
+
+impl From<&str> for TrustLoadError {
+    fn from(detail: &str) -> Self {
+        Self::Unavailable(detail.to_owned())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignatureCheck {
+    Valid,
+    Invalid,
+    InvalidPublicKey,
+}
+
+pub(crate) fn check_ed25519_signature(manifest: &Manifest, anchor: &Anchor) -> SignatureCheck {
+    let key = match VerifyingKey::from_bytes(&anchor.public_key) {
+        Ok(key) => key,
+        Err(_) => return SignatureCheck::InvalidPublicKey,
+    };
+    let signature = Signature::from_bytes(&manifest.signature);
+    let mut message = Vec::with_capacity(SIGNING_DOMAIN.len() + manifest.signed.len());
+    message.extend_from_slice(SIGNING_DOMAIN);
+    message.extend_from_slice(&manifest.signed);
+    if key.verify_strict(&message, &signature).is_ok() {
+        SignatureCheck::Valid
+    } else {
+        SignatureCheck::Invalid
+    }
 }
 
 #[derive(Debug)]
@@ -136,7 +217,7 @@ fn canonical_uint(s: &str) -> Result<u64, String> {
     s.parse().map_err(|_| "integer overflow".into())
 }
 
-fn parse_manifest(bytes: &[u8]) -> Result<Manifest, String> {
+pub(crate) fn parse_manifest(bytes: &[u8]) -> Result<Manifest, String> {
     if bytes.is_empty()
         || bytes.len() > MANIFEST_MAX
         || !bytes.is_ascii()
@@ -222,7 +303,7 @@ fn parse_manifest(bytes: &[u8]) -> Result<Manifest, String> {
     })
 }
 
-fn parse_store(bytes: &[u8]) -> Result<TrustStore, String> {
+pub(crate) fn parse_store(bytes: &[u8]) -> Result<TrustStore, String> {
     if bytes.is_empty()
         || bytes.len() > STORE_MAX
         || !bytes.is_ascii()
@@ -393,7 +474,7 @@ fn same_metadata(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         && a.ctime_nsec() == b.ctime_nsec()
 }
 
-fn ensure_settled_trust_directory(dir: &File) -> Result<(), String> {
+fn ensure_settled_trust_directory(dir: &File) -> Result<(), TrustLoadError> {
     for artifact in [
         "transaction.v1",
         "stage.v1",
@@ -411,15 +492,15 @@ fn ensure_settled_trust_directory(dir: &File) -> Result<(), String> {
             )
         };
         if result == 0 {
-            return Err(
-                "TRUST_TRANSACTION_PENDING: transaction journal or staged artifact exists".into(),
-            );
+            return Err(TrustLoadError::pending(
+                "transaction journal or staged artifact exists",
+            ));
         }
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() != Some(libc::ENOENT) {
-            return Err(format!(
-                "TRUST_TRANSACTION_PENDING: trust transaction safety cannot be established: {error}"
-            ));
+            return Err(TrustLoadError::pending(format!(
+                "trust transaction safety cannot be established: {error}"
+            )));
         }
     }
 
@@ -434,12 +515,16 @@ fn ensure_settled_trust_directory(dir: &File) -> Result<(), String> {
         )
     };
     if scan_fd < 0 {
-        return Err("TRUST_TRANSACTION_PENDING: cannot scan trust metadata directory".into());
+        return Err(TrustLoadError::pending(
+            "cannot scan trust metadata directory",
+        ));
     }
     let stream = unsafe { libc::fdopendir(scan_fd) };
     if stream.is_null() {
         unsafe { libc::close(scan_fd) };
-        return Err("TRUST_TRANSACTION_PENDING: cannot scan trust metadata directory".into());
+        return Err(TrustLoadError::pending(
+            "cannot scan trust metadata directory",
+        ));
     }
     loop {
         let entry = unsafe { libc::readdir(stream) };
@@ -453,18 +538,20 @@ fn ensure_settled_trust_directory(dir: &File) -> Result<(), String> {
             && name != b"generation.v1"
         {
             unsafe { libc::closedir(stream) };
-            return Err(
-                "TRUST_TRANSACTION_PENDING: unexpected trust metadata artifact exists".into(),
-            );
+            return Err(TrustLoadError::pending(
+                "unexpected trust metadata artifact exists",
+            ));
         }
     }
     if unsafe { libc::closedir(stream) } != 0 {
-        return Err("TRUST_TRANSACTION_PENDING: trust metadata directory scan failed".into());
+        return Err(TrustLoadError::pending(
+            "trust metadata directory scan failed",
+        ));
     }
     Ok(())
 }
 
-fn parse_generation_anchor(bytes: &[u8]) -> Result<(u64, [u8; 32]), String> {
+fn parse_generation_anchor(bytes: &[u8]) -> Result<(u64, [u8; 32]), TrustLoadError> {
     if bytes.is_empty()
         || bytes.len() > 192
         || !bytes.is_ascii()
@@ -472,35 +559,45 @@ fn parse_generation_anchor(bytes: &[u8]) -> Result<(u64, [u8; 32]), String> {
         || bytes.contains(&b'\r')
         || bytes.contains(&0)
     {
-        return Err("TRUST_GENERATION_INCONSISTENT: generation anchor is malformed".into());
+        return Err(TrustLoadError::generation_inconsistent(
+            "generation anchor is malformed",
+        ));
     }
     let lines: Vec<&str> = std::str::from_utf8(bytes)
-        .map_err(|_| "TRUST_GENERATION_INCONSISTENT: generation anchor is not UTF-8")?
+        .map_err(|_| TrustLoadError::generation_inconsistent("generation anchor is not UTF-8"))?
         .split_terminator('\n')
         .collect();
     if lines.len() != 4
         || lines[0] != "ios-unsandboxed-trust-generation"
         || lines[1] != "schema_version=1"
     {
-        return Err("TRUST_GENERATION_INCONSISTENT: unsupported generation anchor schema".into());
+        return Err(TrustLoadError::generation_inconsistent(
+            "unsupported generation anchor schema",
+        ));
     }
     let generation = canonical_uint(
         lines[2]
             .strip_prefix("generation=")
-            .ok_or("TRUST_GENERATION_INCONSISTENT: missing generation")?,
-    )?;
+            .ok_or_else(|| TrustLoadError::generation_inconsistent("missing generation"))?,
+    )
+    .map_err(TrustLoadError::generation_inconsistent)?;
     if generation == 0 {
-        return Err("TRUST_GENERATION_INCONSISTENT: zero generation".into());
+        return Err(TrustLoadError::generation_inconsistent("zero generation"));
     }
     let digest = hex_decode::<32>(
         lines[3]
             .strip_prefix("store_sha256=")
-            .ok_or("TRUST_GENERATION_INCONSISTENT: missing store digest")?,
-    )?;
+            .ok_or_else(|| TrustLoadError::generation_inconsistent("missing store digest"))?,
+    )
+    .map_err(TrustLoadError::generation_inconsistent)?;
     Ok((generation, digest))
 }
 
-fn read_generation_anchor(dir: &File, uid: u32, gid: u32) -> Result<Option<Vec<u8>>, String> {
+fn read_generation_anchor(
+    dir: &File,
+    uid: u32,
+    gid: u32,
+) -> Result<Option<Vec<u8>>, TrustLoadError> {
     let name = std::ffi::CString::new("generation.v1").expect("fixed generation name");
     let mut initial: libc::stat = unsafe { std::mem::zeroed() };
     let result = unsafe {
@@ -516,14 +613,18 @@ fn read_generation_anchor(dir: &File, uid: u32, gid: u32) -> Result<Option<Vec<u
         if error.raw_os_error() == Some(libc::ENOENT) {
             return Ok(None);
         }
-        return Err(format!(
-            "TRUST_GENERATION_INCONSISTENT: cannot inspect generation anchor: {error}"
-        ));
+        return Err(TrustLoadError::generation_inconsistent(format!(
+            "cannot inspect generation anchor: {error}"
+        )));
     }
     let mut file = open_child(dir, &name, false).map_err(|error| {
-        format!("TRUST_GENERATION_INCONSISTENT: cannot open generation anchor: {error}")
+        TrustLoadError::generation_inconsistent(format!("cannot open generation anchor: {error}"))
     })?;
-    let before = file.metadata().map_err(|e| e.to_string())?;
+    let before = file.metadata().map_err(|error| {
+        TrustLoadError::generation_inconsistent(format!(
+            "cannot inspect generation anchor metadata: {error}"
+        ))
+    })?;
     if !before.is_file()
         || before.uid() != uid
         || before.gid() != gid
@@ -532,33 +633,45 @@ fn read_generation_anchor(dir: &File, uid: u32, gid: u32) -> Result<Option<Vec<u
         || before.nlink() != 1
         || before.size() > 192
     {
-        return Err(
-            "TRUST_GENERATION_INCONSISTENT: generation anchor ownership, mode, or size is unsafe"
-                .into(),
-        );
+        return Err(TrustLoadError::generation_inconsistent(
+            "generation anchor ownership, mode, or size is unsafe",
+        ));
     }
     let mut bytes = Vec::with_capacity(before.size() as usize);
     (&mut file)
         .take(193)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    let after = file.metadata().map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            TrustLoadError::generation_inconsistent(format!(
+                "cannot read generation anchor: {error}"
+            ))
+        })?;
+    let after = file.metadata().map_err(|error| {
+        TrustLoadError::generation_inconsistent(format!(
+            "cannot inspect generation anchor after read: {error}"
+        ))
+    })?;
     let current = open_child(dir, &name, false)
-        .and_then(|entry| entry.metadata().map_err(|e| e.to_string()))?;
+        .and_then(|entry| entry.metadata().map_err(|e| e.to_string()))
+        .map_err(|error| {
+            TrustLoadError::generation_inconsistent(format!(
+                "cannot recheck generation anchor: {error}"
+            ))
+        })?;
     if bytes.len() > 192 || !same_metadata(&before, &after) || !same_metadata(&before, &current) {
-        return Err(
-            "TRUST_GENERATION_INCONSISTENT: generation anchor changed while being read".into(),
-        );
+        return Err(TrustLoadError::generation_inconsistent(
+            "generation anchor changed while being read",
+        ));
     }
     Ok(Some(bytes))
 }
 
-fn load_store_from_root(
+pub(crate) fn load_store_from_root(
     root: File,
     components: &[&std::ffi::CStr],
     uid: u32,
     gid: u32,
-) -> Result<TrustStore, String> {
+) -> Result<TrustSnapshot, TrustLoadError> {
     let mut dirs = vec![root];
     let mut snapshots = Vec::new();
     for (index, component) in components.iter().enumerate() {
@@ -622,12 +735,16 @@ fn load_store_from_root(
         }
     }
     let store = parse_store(&bytes)?;
+    let actual_digest: [u8; 32] = Sha256::digest(&bytes).into();
+    let mut generation_marker_status = GenerationMarkerStatus::Missing;
     if let Some(anchor) = read_generation_anchor(dir, uid, gid)? {
         let (generation, digest) = parse_generation_anchor(&anchor)?;
-        let actual_digest: [u8; 32] = Sha256::digest(&bytes).into();
         if generation != store.generation || digest != actual_digest {
-            return Err("TRUST_GENERATION_INCONSISTENT: store generation or digest differs from local history".into());
+            return Err(TrustLoadError::generation_inconsistent(
+                "store generation or digest differs from local history",
+            ));
         }
+        generation_marker_status = GenerationMarkerStatus::Consistent;
     }
     ensure_settled_trust_directory(dir)?;
     let final_store = file.metadata().map_err(|e| e.to_string())?;
@@ -646,10 +763,14 @@ fn load_store_from_root(
             return Err("trust-store directory changed during final consistency check".into());
         }
     }
-    Ok(store)
+    Ok(TrustSnapshot {
+        store,
+        digest: actual_digest,
+        generation_marker_status,
+    })
 }
 
-fn load_production_store() -> Result<TrustStore, String> {
+pub(crate) fn load_production_snapshot() -> Result<TrustSnapshot, TrustLoadError> {
     let root = OpenOptions::new()
         .read(true)
         .custom_flags(OPEN_SAFE_FLAGS | libc::O_DIRECTORY)
@@ -671,6 +792,12 @@ fn load_production_store() -> Result<TrustStore, String> {
         .collect();
     let refs: Vec<_> = names.iter().map(|s| s.as_c_str()).collect();
     load_store_from_root(root, &refs, 0, 0)
+}
+
+fn load_production_store() -> Result<TrustStore, String> {
+    load_production_snapshot()
+        .map(|snapshot| snapshot.store)
+        .map_err(|error| error.to_string())
 }
 
 pub fn inspect_manifest(manifest_path: &Path, artifact: &ArtifactIdentity) -> Report {
@@ -767,23 +894,18 @@ fn verify_manifest(
             return report;
         }
     };
-    let key = match VerifyingKey::from_bytes(&anchor.public_key) {
-        Ok(k) => k,
-        Err(_) => {
+    match check_ed25519_signature(&m, anchor) {
+        SignatureCheck::Valid => report.signature_validity = "VALID",
+        SignatureCheck::Invalid => {
+            report.signature_validity = "INVALID";
+            report.error = Some("Ed25519 signature verification failed".into());
+            return report;
+        }
+        SignatureCheck::InvalidPublicKey => {
             report.error = Some("malformed Ed25519 public key".into());
             return report;
         }
-    };
-    let signature = Signature::from_bytes(&m.signature);
-    let mut message = Vec::with_capacity(SIGNING_DOMAIN.len() + m.signed.len());
-    message.extend_from_slice(SIGNING_DOMAIN);
-    message.extend_from_slice(&m.signed);
-    report.signature_validity = "INVALID";
-    if key.verify_strict(&message, &signature).is_err() {
-        report.error = Some("Ed25519 signature verification failed".into());
-        return report;
     }
-    report.signature_validity = "VALID";
     if anchor.state == "revoked" {
         report.trust_anchor = "REVOKED";
         report.error = Some("signing key is revoked".into());
@@ -1091,7 +1213,12 @@ mod tests {
                 .unwrap();
             load_store_from_root(rootfd, &[component], meta.uid(), meta.gid())
         };
-        assert_eq!(read(&name).unwrap().generation, 1);
+        let initial = read(&name).unwrap();
+        assert_eq!(initial.store.generation, 1);
+        assert_eq!(
+            initial.generation_marker_status,
+            GenerationMarkerStatus::Missing
+        );
         let store_bytes = std::fs::read(&store).unwrap();
         let store_hash = Sha256::digest(&store_bytes)
             .iter()
@@ -1106,22 +1233,29 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&generation, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(read(&name).unwrap().generation, 1);
+        let anchored = read(&name).unwrap();
+        assert_eq!(anchored.store.generation, 1);
+        assert_eq!(
+            anchored.generation_marker_status,
+            GenerationMarkerStatus::Consistent
+        );
         std::fs::write(
             &store,
             b"ios-unsandboxed-trust-store\nschema_version=1\ngeneration=2\nkey_count=0\n",
         )
         .unwrap();
-        assert!(read(&name)
-            .unwrap_err()
-            .contains("TRUST_GENERATION_INCONSISTENT"));
+        assert!(matches!(
+            read(&name).unwrap_err(),
+            TrustLoadError::GenerationInconsistent(_)
+        ));
         std::fs::write(&store, &store_bytes).unwrap();
         let transaction = dir.join("transaction.v1");
         std::fs::write(&transaction, b"corrupt\n").unwrap();
         std::fs::set_permissions(&transaction, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(read(&name)
-            .unwrap_err()
-            .contains("TRUST_TRANSACTION_PENDING"));
+        assert!(matches!(
+            read(&name).unwrap_err(),
+            TrustLoadError::Pending(_)
+        ));
         std::fs::remove_file(&transaction).unwrap();
         let stage = dir.join("stage.v1");
         std::fs::write(
@@ -1130,23 +1264,26 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(read(&name)
-            .unwrap_err()
-            .contains("TRUST_TRANSACTION_PENDING"));
+        assert!(matches!(
+            read(&name).unwrap_err(),
+            TrustLoadError::Pending(_)
+        ));
         std::fs::remove_file(stage).unwrap();
         let foreign = dir.join("recovery-notes.txt");
         std::fs::write(&foreign, b"administrator evidence\n").unwrap();
-        assert!(read(&name)
-            .unwrap_err()
-            .contains("TRUST_TRANSACTION_PENDING"));
+        assert!(matches!(
+            read(&name).unwrap_err(),
+            TrustLoadError::Pending(_)
+        ));
         std::fs::remove_file(foreign).unwrap();
         let alias = root.join("alias");
         symlink(&dir, &alias).unwrap();
         assert!(read(&std::ffi::CString::new("alias").unwrap()).is_err());
         symlink("missing-target", &transaction).unwrap();
-        assert!(read(&name)
-            .unwrap_err()
-            .contains("TRUST_TRANSACTION_PENDING"));
+        assert!(matches!(
+            read(&name).unwrap_err(),
+            TrustLoadError::Pending(_)
+        ));
         std::fs::remove_file(&transaction).unwrap();
         let hard = root.join("hard");
         std::fs::hard_link(&store, &hard).unwrap();

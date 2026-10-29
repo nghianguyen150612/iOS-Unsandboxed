@@ -1,0 +1,27 @@
+# Authenticated provenance launch preview
+
+P013C connects P010 identity inspection, P011 execution scope, P012 descriptor preview, P013 Ed25519 verification, and the P013B trust store inside one read-only Rust operation. The CLI entry point is `iu provenance plan MANIFEST ARTIFACT`; it does not contact the daemon.
+
+## In-process boundary
+
+`cli/src/authenticated_binding.rs::preview` is the production entry point. It accepts only manifest and artifact paths. It opens the artifact with `O_NOFOLLOW`, retains the resulting `File`, and calls the C17 `iu_launch_binding_preview_fd_summary_v2` function with that borrowed descriptor. C does not close it. The C summary carries no pointers and contains the P011/P003/P012 observation plus the P010 plan. Its ABI is version 2 and 3376 bytes. The older P012 launch result ABI v1 remains 5472 bytes and is not reinterpreted; the v2 C implementation projects the established v1 preview while omitting its legacy provenance result.
+
+P010 still resolves and checks the requested pathname to establish its canonical path and to detect replacement. In its fd-v2 path, P010 parses Mach-O structure and hashes bytes from the borrowed descriptor. C also hashes and parses that descriptor and checks device, inode, size, owner, group, mode, link count, and nanosecond mtime/ctime against P010's plan. Rust uses positional reads from the same descriptor, checks the same metadata and digest, and binds the manifest's digest, size, architecture, and file type to that plan. No caller-supplied trust booleans enter this path.
+
+Rust parses canonical manifest bytes and calls the existing `provenance::check_ed25519_signature`, backed by the repository's RustCrypto `ed25519-dalek` dependency. The key must be present, active, use the supported algorithm, and name the same publisher as the signed statement. This verifies the publisher statement over its canonical signed bytes. It does not establish source repository authenticity, builder identity, reproducibility, safe behavior, or a non-Apple origin.
+
+The production trust reader traverses the configured root-owned directories using held descriptors and no-follow `openat` calls. It checks owner/mode, single-link bounded store and marker files, stable metadata, canonical store bytes, and the generation marker digest. Transaction, staging, temporary, or unexpected metadata artifacts produce the typed `Pending` state. A marker/store generation or digest disagreement produces `GenerationInconsistent`. Other read and parse failures produce `Unavailable`. The operation reloads and compares generation, digest, and marker status before returning, and rejects any observable change.
+
+P011's current policy scope, policy-store identity/digest, and P003 hypothetical classification are supplied by the P012 C preview. C's v2 revalidator reconstructs only an empty legacy diagnostic and invokes the existing P012 v1 revalidation path. Rust then rechecks its artifact descriptor, pathname identity, exact bytes, metadata, manifest, and trust snapshot. A stale scope/policy, trust store, manifest, inode, or content returns a typed failure. The result is diagnostic data, not an authorization token.
+
+## Fail-closed result
+
+The Rust `CompositePreviewV2` keeps artifact identity, Mach-O class, manifest integrity, signature, key, publisher, trust snapshot, P011 scope, protected-path observation, and revalidation as typed enums. `diagnostic_success()` means the diagnostic tuple was internally consistent at the final checks. It does not mean launch eligibility. Every result reports execution activation disabled, build origin unverified, protected origin unknown unless P003 identifies a protected path, Amethyst runtime unverified, launch boundary not implemented, and operational authorization false.
+
+The local `generation.v1` marker helps detect inconsistent local history while it is present. It is not an independent monotonic anchor: a privileged actor able to replace all local trust history can roll it back. The report therefore remains `ROLLBACK_PROTECTION_UNVERIFIED`.
+
+## Limits and remaining evidence
+
+The descriptor and pathname can change immediately after the final checks. P012 does not bind this preview to a later `execve`, and there is no atomic launch boundary. Metadata checks also cannot rule out every hostile filesystem or privileged concurrent writer. This is a point-in-time read-only preview.
+
+An independent provenance provider is still needed for authenticated source/build inputs, builder identity, reproducibility or build attestation, and a reviewed completeness claim for protected Apple artifacts. The signed `origin=unprotected` field is only a publisher assertion. No executable launch, signing bypass, trust-cache mutation, sandbox change, service activation, or Amethyst-private operation is part of P013C. Rootful installation, filesystem behavior, SSH invocation, policy ownership, and lifecycle behavior still require physical iPad qualification; device validation is NOT RUN.
