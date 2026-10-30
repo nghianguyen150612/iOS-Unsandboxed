@@ -1,5 +1,7 @@
 # Builder-trust contract
 
+P013D-2B-1 adds partial read-only journal and combined-marker handling. Transaction or stage artifacts fail closed; the detailed crash-state classifier and recovery writes remain outstanding. See [transaction metadata](builder-trust-transactions.md).
+
 Publisher trust and builder trust are different authorities. P013 publisher keys authenticate publisher statements about artifacts. P013D's builder provider independently maps DSSE signer keys to signer identities and signer identities to authorized builder identities and build policies. A publisher key is never promoted into a builder key automatically.
 
 ## Versioned provider

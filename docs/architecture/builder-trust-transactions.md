@@ -1,0 +1,7 @@
+# Builder trust transaction metadata
+
+This increment is partial. The C17 ABI v1 and Rust parser accept the same bounded ASCII/LF journal in `transaction.v1`, with ordered fields: header `ios-unsandboxed-builder-transaction`, `schema_version=1`, `operation` (`roots`, `policies`, or `combined`), old and new root generations and SHA-256 digests, old and new policy generations and SHA-256 digests, fixed `stage_roots=roots.stage.v1`, `stage_policies=policies.stage.v1`, and `phase=prepared`. The canonical field order is shown by `tests/builder-trust/valid-transaction.v1`. Old generation and digest are both `none` for an absent store. An unchanged store retains both generation and digest; a changed present store increments its generation by one and changes its digest; an absent store starts at generation one. Overflow and arbitrary stage names are rejected.
+
+The read-only `state.v1` marker uses the ordered ASCII lines `ios-unsandboxed-builder-state`, `schema_version=1`, `root_generation`, `root_sha256`, `policy_generation`, and `policy_sha256`. It must match both loaded stores. An absent marker is reported as legacy unanchored history. Neither marker nor journal is independently rollback-resistant.
+
+The reader recognizes journal and stage names and rejects their presence as pending; a malformed journal is corrupt. The detailed crash-state classifier and parity coverage for all transition cases are not implemented. There is no production commit or recovery write operation. All such states remain fail-closed and require future recovery implementation.

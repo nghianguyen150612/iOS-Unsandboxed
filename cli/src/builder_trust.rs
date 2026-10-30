@@ -34,6 +34,9 @@ pub enum StoreErrorKind {
     Malformed,
     Unsupported,
     Stale,
+    Pending,
+    TransactionCorrupt,
+    MarkerInconsistent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +103,7 @@ pub struct BuilderTrustSnapshotV1 {
     directory_chain: Vec<FileIdentity>,
     root_file: FileIdentity,
     policy_file: FileIdentity,
+    marker: Option<FileSnapshot>,
 }
 
 impl BuilderTrustSnapshotV1 {
@@ -161,6 +165,9 @@ struct LocalTrustState {
     roots: LoadedStore<RootStoreV1>,
     policies: LoadedStore<PolicyStoreV1>,
     directory_chain: Option<Vec<FileIdentity>>,
+    marker: Option<FileSnapshot>,
+    marker_status: &'static str,
+    transaction_status: &'static str,
 }
 
 #[derive(Debug)]
@@ -202,6 +209,7 @@ impl LocalTrustState {
             directory_chain: self.directory_chain.clone()?,
             root_file: root.identity.clone(),
             policy_file: policy.identity.clone(),
+            marker: self.marker.clone(),
         })
     }
 }
@@ -307,9 +315,10 @@ impl LocalBuilderVerificationProviderV1 {
         };
         let configured = self.snapshot().is_some();
         format!(
-            "Builder trust provider: {}\nRoot store: {}\nPolicy store: {}\nIndependent trust establishment: UNVERIFIED\nRollback protection: UNVERIFIED\nBuild-origin verification: BUILD_ORIGIN_UNVERIFIED\n",
+            "Builder trust provider: {}\nRoot store: {}\nPolicy store: {}\nTransaction state: {}\nCombined marker: {}\nRecovery required: {}\nIndependent trust establishment: UNVERIFIED\nRollback protection: UNVERIFIED\nBuild-origin verification: BUILD_ORIGIN_UNVERIFIED\n",
             if configured { "CONFIGURED_READ_ONLY" } else { "UNCONFIGURED_OR_UNAVAILABLE" },
-            root, policy
+            root, policy, self.state.transaction_status, self.state.marker_status,
+            match self.state.transaction_status { "NO_TRANSACTION" => "NO", "BUILDER_TRANSACTION_PENDING" | "BUILDER_TRANSACTION_CORRUPT" => "YES", _ => "UNKNOWN" }
         )
     }
 
@@ -357,12 +366,17 @@ impl LocalBuilderVerificationProviderV1 {
 
     pub fn inspect_report(&self, signer_id: &str) -> String {
         let Some(roots) = self.state.roots.parsed.as_ref() else {
-            return format!("Signer {signer_id}: unavailable\n{}", self.status_report());
+            return format!(
+                "Signer {}: unavailable\n{}",
+                escape(signer_id),
+                self.status_report()
+            );
         };
         let Some(record) = roots.keys.get(signer_id) else {
             return format!(
-                "Signer key ID: {}\nStatus: UNKNOWN_SIGNER\nIndependent trust establishment: UNVERIFIED\nRollback protection: UNVERIFIED\n",
-                escape(signer_id)
+                "Signer key ID: {}\nStatus: UNKNOWN_SIGNER\n{}",
+                escape(signer_id),
+                self.status_report()
             );
         };
         let mut output = format!(
@@ -392,9 +406,7 @@ impl LocalBuilderVerificationProviderV1 {
             }
             None => output.push_str("Builder policies: UNAVAILABLE\n"),
         }
-        output.push_str(
-            "Independent trust establishment: UNVERIFIED\nRollback protection: UNVERIFIED\n",
-        );
+        output.push_str(&self.status_report());
         output
     }
 
@@ -420,6 +432,16 @@ impl LocalBuilderVerificationProviderV1 {
 impl BuilderVerificationProviderV1 for LocalBuilderVerificationProviderV1 {
     fn version(&self) -> u32 {
         PROVIDER_VERSION_V1
+    }
+
+    fn diagnostic_error(&self) -> Option<crate::build_attestation::AttestationError> {
+        use crate::build_attestation::AttestationError;
+        match &self.state.roots.error.as_ref()?.kind {
+            StoreErrorKind::Pending => Some(AttestationError::BuilderTransactionPending),
+            StoreErrorKind::TransactionCorrupt => Some(AttestationError::BuilderTransactionCorrupt),
+            StoreErrorKind::MarkerInconsistent => Some(AttestationError::BuilderMarkerInconsistent),
+            _ => None,
+        }
     }
 
     fn signer(&self, key_id: &str) -> Option<SignerV1> {
@@ -529,6 +551,17 @@ fn store_status<T>(store: &LoadedStore<T>) -> String {
 }
 
 fn unavailable_state(error: StoreError) -> LocalTrustState {
+    let transaction_status = match error.kind {
+        StoreErrorKind::Pending => "BUILDER_TRANSACTION_PENDING",
+        StoreErrorKind::TransactionCorrupt => "BUILDER_TRANSACTION_CORRUPT",
+        StoreErrorKind::Unsafe => "UNSAFE_OR_UNKNOWN_STATE",
+        _ => "UNAVAILABLE",
+    };
+    let marker_status = if error.kind == StoreErrorKind::MarkerInconsistent {
+        "BUILDER_GENERATION_MARKER_INCONSISTENT"
+    } else {
+        "UNAVAILABLE"
+    };
     LocalTrustState {
         roots: LoadedStore {
             parsed: None,
@@ -541,6 +574,9 @@ fn unavailable_state(error: StoreError) -> LocalTrustState {
             error: Some(error),
         },
         directory_chain: None,
+        marker: None,
+        marker_status,
+        transaction_status,
     }
 }
 
@@ -563,18 +599,78 @@ fn load_state_from_root(
         Ok(value) => value,
         Err(error) => return unavailable_state(error),
     };
-    if let Err(error) = check_directory_entries(&directory) {
-        return unavailable_state(error);
+    let entries = match check_directory_entries(&directory) {
+        Ok(entries) => entries,
+        Err(error) => return unavailable_state(error),
+    };
+    for name in ["transaction.v1", "roots.stage.v1", "policies.stage.v1"] {
+        if entries.contains(name) {
+            let parser: StoreParser<()> = if name == "transaction.v1" {
+                |bytes| {
+                    crate::builder_transaction::parse_journal(bytes)
+                        .map_err(|e| StoreError::new(StoreErrorKind::TransactionCorrupt, e))?;
+                    Ok(((), 0))
+                }
+            } else {
+                |_| Ok(((), 0))
+            };
+            let artifact = read_store(&directory, name, uid, gid, parser);
+            if let Some(error) = artifact.error {
+                return unavailable_state(error);
+            }
+            return unavailable_state(StoreError::new(
+                StoreErrorKind::Pending,
+                format!("transaction artifact {name} requires recovery"),
+            ));
+        }
     }
     let root_store = read_store::<RootStoreV1>(&directory, ROOT_FILE, uid, gid, parse_root_store);
     let policy_store =
         read_store::<PolicyStoreV1>(&directory, POLICY_FILE, uid, gid, parse_policy_store);
+    let marker = if entries.contains("state.v1") {
+        let loaded = read_store(&directory, "state.v1", uid, gid, |bytes| {
+            let marker = crate::builder_transaction::parse_marker(bytes)
+                .map_err(|e| StoreError::new(StoreErrorKind::MarkerInconsistent, e))?;
+            Ok((marker, 0))
+        });
+        let Some(value) = loaded.parsed.as_ref() else {
+            return unavailable_state(loaded.error.unwrap_or_else(|| {
+                StoreError::new(StoreErrorKind::MarkerInconsistent, "marker unavailable")
+            }));
+        };
+        let valid = root_store
+            .snapshot
+            .as_ref()
+            .zip(policy_store.snapshot.as_ref())
+            .is_some_and(|(roots, policies)| {
+                value.roots.generation == roots.generation
+                    && value.roots.digest == hex(&roots.digest)
+                    && value.policies.generation == policies.generation
+                    && value.policies.digest == hex(&policies.digest)
+            });
+        if !valid {
+            return unavailable_state(StoreError::new(
+                StoreErrorKind::MarkerInconsistent,
+                "marker does not match root/policy pair",
+            ));
+        }
+        loaded.snapshot
+    } else {
+        None
+    };
     let final_chain_ok = revalidate_directory_chain(&root_for_revalidation, components, &chain);
     let directory_chain = if final_chain_ok { Some(chain) } else { None };
     let mut state = LocalTrustState {
         roots: root_store,
         policies: policy_store,
         directory_chain,
+        marker_status: if marker.is_some() {
+            "MATCHING"
+        } else {
+            "LEGACY_UNANCHORED"
+        },
+        marker,
+        transaction_status: "NO_TRANSACTION",
     };
     if state.directory_chain.is_none() {
         let stale = StoreError::new(StoreErrorKind::Stale, "trust directory changed during read");
@@ -661,7 +757,7 @@ fn open_child(parent: &File, name: &std::ffi::CStr, directory: bool) -> Result<F
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn check_directory_entries(directory: &File) -> Result<(), StoreError> {
+fn check_directory_entries(directory: &File) -> Result<BTreeSet<String>, StoreError> {
     let dot = std::ffi::CString::new(".").expect("dot");
     let fd = unsafe {
         libc::openat(
@@ -685,6 +781,7 @@ fn check_directory_entries(directory: &File) -> Result<(), StoreError> {
         ));
     }
     let mut unexpected = false;
+    let mut entries = BTreeSet::new();
     loop {
         let entry = unsafe { libc::readdir(stream) };
         if entry.is_null() {
@@ -695,9 +792,16 @@ fn check_directory_entries(directory: &File) -> Result<(), StoreError> {
             && name != b".."
             && name != ROOT_FILE.as_bytes()
             && name != POLICY_FILE.as_bytes()
+            && name != b"state.v1"
+            && name != b"transaction.v1"
+            && name != b"roots.stage.v1"
+            && name != b"policies.stage.v1"
         {
             unexpected = true;
             break;
+        }
+        if name != b"." && name != b".." {
+            entries.insert(String::from_utf8_lossy(name).into_owned());
         }
     }
     unsafe { libc::closedir(stream) };
@@ -707,7 +811,7 @@ fn check_directory_entries(directory: &File) -> Result<(), StoreError> {
             "unexpected entry in builder trust directory",
         ))
     } else {
-        Ok(())
+        Ok(entries)
     }
 }
 
@@ -1727,6 +1831,75 @@ mod tests {
                 std::fs::rename(replacement, directory_path.join(ROOT_FILE)).unwrap();
             });
         assert_eq!(result.error.unwrap().kind, StoreErrorKind::Stale);
+    }
+
+    #[test]
+    fn transaction_artifacts_and_marker_fail_closed_without_writes() {
+        let tree = TempTree::new("transaction-marker");
+        let directory = tree.trust_dir();
+        let key = SigningKey::from_bytes(&[0x67; 32])
+            .verifying_key()
+            .to_bytes();
+        let roots = root_json(&key, "builder-signer", "active");
+        let policies = serde_json::to_vec(
+            &serde_json::json!({"schemaVersion":1,"generation":1,"policies":[]}),
+        )
+        .unwrap();
+        write_store(&directory, ROOT_FILE, &roots);
+        write_store(&directory, POLICY_FILE, &policies);
+        let legacy = tree.provider();
+        assert!(legacy.snapshot().is_some());
+        assert!(legacy.status_report().contains("LEGACY_UNANCHORED"));
+        let marker = format!("ios-unsandboxed-builder-state\nschema_version=1\nroot_generation=3\nroot_sha256={}\npolicy_generation=1\npolicy_sha256={}\n", hex(&Sha256::digest(&roots)), hex(&Sha256::digest(&policies)));
+        write_store(&directory, "state.v1", marker.as_bytes());
+        assert!(legacy.revalidate().is_err());
+        let matching = tree.provider();
+        assert!(matching.snapshot().is_some());
+        assert!(matching
+            .status_report()
+            .contains("Combined marker: MATCHING"));
+        write_store(
+            &directory,
+            "state.v1",
+            marker
+                .replace("root_generation=3", "root_generation=4")
+                .as_bytes(),
+        );
+        let inconsistent = tree.provider();
+        assert!(inconsistent.signer(&derive_key_id(&key)).is_none());
+        assert!(inconsistent
+            .status_report()
+            .contains("BUILDER_GENERATION_MARKER_INCONSISTENT"));
+        write_store(&directory, "state.v1", marker.as_bytes());
+        write_store(&directory, "roots.stage.v1", &roots);
+        let pending = tree.provider();
+        assert!(pending.signer(&derive_key_id(&key)).is_none());
+        assert!(pending
+            .status_report()
+            .contains("BUILDER_TRANSACTION_PENDING"));
+        assert_eq!(
+            pending.diagnostic_error(),
+            Some(crate::build_attestation::AttestationError::BuilderTransactionPending)
+        );
+        assert_eq!(
+            std::fs::read(directory.join("roots.stage.v1")).unwrap(),
+            roots
+        );
+        std::fs::remove_file(directory.join("roots.stage.v1")).unwrap();
+        write_store(&directory, "transaction.v1", b"corrupt\n");
+        let corrupt = tree.provider();
+        assert!(corrupt.signer(&derive_key_id(&key)).is_none());
+        assert!(corrupt
+            .status_report()
+            .contains("BUILDER_TRANSACTION_CORRUPT"));
+        assert_eq!(
+            corrupt.diagnostic_error(),
+            Some(crate::build_attestation::AttestationError::BuilderTransactionCorrupt)
+        );
+        assert_eq!(
+            std::fs::read(directory.join("transaction.v1")).unwrap(),
+            b"corrupt\n"
+        );
     }
 
     #[test]

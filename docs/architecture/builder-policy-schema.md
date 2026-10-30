@@ -1,5 +1,7 @@
 # P013D-2A builder policy schema
 
+The optional combined `state.v1` marker binds this policy store to the root store; a conflicting marker fails closed. See [transaction metadata](builder-trust-transactions.md).
+
 `policies.v1` is a separate canonical JSON document. Its root has exactly
 `schemaVersion`, `generation`, and `policies`. `schemaVersion` is integer `1`,
 and there may be at most 64 policy records. Root and policy generations are

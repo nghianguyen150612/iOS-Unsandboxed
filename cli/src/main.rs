@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod authenticated_binding;
 mod build_attestation;
+mod builder_transaction;
 mod builder_trust;
 mod ipc;
 mod planner;

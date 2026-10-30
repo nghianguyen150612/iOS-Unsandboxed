@@ -230,6 +230,9 @@ pub enum AttestationError {
     SubjectAmbiguous,
     UnknownSigner,
     RevokedSigner,
+    BuilderTransactionPending,
+    BuilderTransactionCorrupt,
+    BuilderMarkerInconsistent,
     SignerIdentityUnverified,
     InvalidSignature,
     UnsupportedSignatureAlgorithm,
@@ -263,6 +266,9 @@ impl AttestationError {
             Self::SubjectAmbiguous => "SUBJECT_AMBIGUOUS",
             Self::UnknownSigner => "UNKNOWN_SIGNER",
             Self::RevokedSigner => "REVOKED_SIGNER",
+            Self::BuilderTransactionPending => "BUILDER_TRANSACTION_PENDING",
+            Self::BuilderTransactionCorrupt => "BUILDER_TRANSACTION_CORRUPT",
+            Self::BuilderMarkerInconsistent => "BUILDER_GENERATION_MARKER_INCONSISTENT",
             Self::SignerIdentityUnverified => "SIGNER_IDENTITY_UNVERIFIED",
             Self::InvalidSignature => "SIGNATURE_INVALID",
             Self::UnsupportedSignatureAlgorithm => "UNSUPPORTED_SIGNATURE_ALGORITHM",
@@ -504,6 +510,10 @@ pub trait BuilderVerificationProviderV1 {
         false
     }
 
+    fn diagnostic_error(&self) -> Option<AttestationError> {
+        None
+    }
+
     fn builder_authority(
         &self,
         signer_identity: &str,
@@ -690,7 +700,9 @@ pub(crate) fn verify_bytes<P: BuilderVerificationProviderV1 + ?Sized>(
                 SignatureStatus::UnknownSigner
             };
             result.signer_identity = SignerIdentityStatus::Unknown;
-            result.error = Some(if provider.signer_revoked(key_id) {
+            result.error = Some(if let Some(error) = provider.diagnostic_error() {
+                error
+            } else if provider.signer_revoked(key_id) {
                 AttestationError::RevokedSigner
             } else {
                 AttestationError::UnknownSigner

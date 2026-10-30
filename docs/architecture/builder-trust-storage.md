@@ -8,7 +8,7 @@ its `/private/var` backing path. Publisher trust remains in its separate
 P013B store and cannot supply builder keys.
 
 The directory is expected to be root-owned mode `0700`. The only allowed
-entries are `roots.v1` and `policies.v1`; each must be a root-owned regular
+settled entries are `roots.v1`, `policies.v1`, and optionally `state.v1`; each must be a root-owned regular
 file, mode `0600`, with one hard link and a maximum size of 64 KiB. The reader
 walks from a held `/` descriptor with `openat`, `O_NOFOLLOW`, and
 `O_DIRECTORY`. It checks ownership, modes, link count, file identity and
@@ -52,3 +52,5 @@ are not rollback-resistant against an attacker who can replace the stores.
 Missing stores remain missing during inspection. No transaction, enrollment,
 revocation, rotation, or recovery writes exist in this increment. Those
 lifecycle interfaces are deferred to P013D-2B.
+
+The partial P013D-2B-1 reader detects `transaction.v1` and the fixed stage names and fails closed. A matching `state.v1` binds both stores; a missing marker reports legacy unanchored history. See [transaction metadata](builder-trust-transactions.md).

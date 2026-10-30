@@ -23,6 +23,8 @@ jobs:
         run: make trust-recovery-test
       - name: Run the builder trust store and policy fixtures
         run: make builder-trust-test
+      - name: Run builder transaction codec fixtures
+        run: make builder-transaction-test
       - name: Run Rust, native, provenance, launch binding, policy, IPC, packaging, installer, and smoke tests
         run: make test
 
