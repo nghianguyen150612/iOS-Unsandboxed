@@ -1,6 +1,6 @@
 # P013 trust gates
 
-P013D-2B-1 transaction handling is PARTIAL: journal/stage detection and the combined marker are read-only; detailed crash-state classification and recovery writes are not complete. See [transaction gates](P013D2B1_TRANSACTION_GATES.md).
+P013D-2B-1 adds read-only crash-state classification and C17/Rust journal parity. Transaction commit and recovery writes remain unimplemented and are not claimed as complete. See [transaction gates](P013D2B1_TRANSACTION_GATES.md).
 
 ## Offline implementation status
 

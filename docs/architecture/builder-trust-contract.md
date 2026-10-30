@@ -1,6 +1,6 @@
 # Builder-trust contract
 
-P013D-2B-1 adds partial read-only journal and combined-marker handling. Transaction or stage artifacts fail closed; the detailed crash-state classifier and recovery writes remain outstanding. See [transaction metadata](builder-trust-transactions.md).
+P013D-2B-1 adds a versioned C17 journal codec, matching Rust parser, combined marker parser, and read-only classifier for old, staged, partially replaced, committed, corrupt, unsafe, and conflicting observations. Every journal or stage artifact still withholds signer and policy authority, including a complete new pair; no recovery writes are implemented. See [transaction metadata](builder-trust-transactions.md).
 
 Publisher trust and builder trust are different authorities. P013 publisher keys authenticate publisher statements about artifacts. P013D's builder provider independently maps DSSE signer keys to signer identities and signer identities to authorized builder identities and build policies. A publisher key is never promoted into a builder key automatically.
 
@@ -24,9 +24,9 @@ The verifier keeps these statuses independent: `SIGNATURE_VALID`, `SIGNER_IDENTI
 
 Local roots bind an exact Ed25519 key ID and public key to one exact signer identity. Policies separately bind that identity to exact builder IDs, build types, complete external-parameter objects, source URIs, and explicitly allowed full Git revisions. The DSSE key ID is only a lookup hint. Structural parameter equality rejects missing or extra fields.
 
-The read-only provider reports root/policy generations and SHA-256 digests, signer key ID and identity, builder identity, and applicable policy ID. It reloads both stores before returning a successful diagnostic and invalidates trust if file or directory identity, content, or generation changes. The local generations do not provide adversarial rollback protection.
+The read-only provider reports root/policy generations and SHA-256 digests, signer key ID and identity, builder identity, and applicable policy ID. It reloads both stores before returning a successful diagnostic and invalidates trust if file or directory identity, content, or generation changes. If transaction artifacts exist, status reports their classified state and observed store generations while signer and policy access remain unavailable. The local generations do not provide adversarial rollback protection.
 
-P013D-2A does not implement an independently reviewed enrollment chain. Root ownership proves only that local administration installed a file; it does not prove the real-world identity of the named CI system. Thus even a matching production key and policy report `Independent trust establishment: UNVERIFIED` and `BUILD_ORIGIN_UNVERIFIED`. P013D-2B must establish enrollment, revocation, rotation, transaction recovery, and rollback protection before production may claim build origin.
+P013D-2A does not implement an independently reviewed enrollment chain. Root ownership proves only that local administration installed a file; it does not prove the real-world identity of the named CI system. Thus even a matching production key and policy report `Independent trust establishment: UNVERIFIED` and `BUILD_ORIGIN_UNVERIFIED`. Later P013D-2B increments must establish enrollment, revocation, rotation, transaction commit/recovery writes, and a reviewed rollback strategy before production may claim build origin.
 
 Host tests use deterministic synthetic Ed25519 keys and isolated temporary root/policy stores. No CLI option, environment variable, or production configuration selects those fixtures. Their successful cryptographic and policy verification demonstrates implementation behavior only.
 

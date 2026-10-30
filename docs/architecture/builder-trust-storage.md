@@ -7,9 +7,11 @@ trust directory or file. The production path is
 its `/private/var` backing path. Publisher trust remains in its separate
 P013B store and cannot supply builder keys.
 
-The directory is expected to be root-owned mode `0700`. The only allowed
-settled entries are `roots.v1`, `policies.v1`, and optionally `state.v1`; each must be a root-owned regular
-file, mode `0600`, with one hard link and a maximum size of 64 KiB. The reader
+The directory is expected to be root-owned mode `0700`. Settled entries are
+`roots.v1`, `policies.v1`, and optionally `state.v1`. During an interrupted
+update, the reader also recognizes only `transaction.v1`, `roots.stage.v1`, and
+`policies.stage.v1`. Every recognized entry must be a root-owned regular
+file, mode `0600`, with one hard link and a strict size limit. The reader
 walks from a held `/` descriptor with `openat`, `O_NOFOLLOW`, and
 `O_DIRECTORY`. It checks ownership, modes, link count, file identity and
 metadata before and after bounded reads, reopens entries relative to held
@@ -49,8 +51,13 @@ the complete snapshot. Any replacement, mutation, parse failure or generation
 change invalidates signer and policy authentication. These local generations
 are not rollback-resistant against an attacker who can replace the stores.
 
-Missing stores remain missing during inspection. No transaction, enrollment,
-revocation, rotation, or recovery writes exist in this increment. Those
-lifecycle interfaces are deferred to P013D-2B.
+Missing stores remain missing during inspection. A journal or stage is parsed
+and classified from the observed contents, then causes signer and policy
+authority to be withheld for every state, including a fully matching new pair.
+Status output retains the observed store generations and digests for review.
+No transaction, enrollment, revocation, rotation, or recovery writes exist in
+this increment. Those lifecycle interfaces are deferred to P013D-2B-2.
 
-The partial P013D-2B-1 reader detects `transaction.v1` and the fixed stage names and fails closed. A matching `state.v1` binds both stores; a missing marker reports legacy unanchored history. See [transaction metadata](builder-trust-transactions.md).
+A matching `state.v1` binds both stores; a missing marker reports legacy
+unanchored history. Neither generations nor the marker resist an attacker who
+can replace all local trust history. See [transaction metadata](builder-trust-transactions.md).

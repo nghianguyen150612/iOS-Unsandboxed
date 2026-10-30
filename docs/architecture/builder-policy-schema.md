@@ -1,6 +1,6 @@
 # P013D-2A builder policy schema
 
-The optional combined `state.v1` marker binds this policy store to the root store; a conflicting marker fails closed. See [transaction metadata](builder-trust-transactions.md).
+The optional combined `state.v1` marker binds this policy store to the root store; a conflicting marker fails closed. Root and policy changes are one logical configuration. `transaction.v1` records expected old/new generations and digests for both stores, including the unchanged store when an operation changes only one. The read-only classifier rejects unsettled pairs and retains the actual observed generations in status output. See [transaction metadata](builder-trust-transactions.md).
 
 `policies.v1` is a separate canonical JSON document. Its root has exactly
 `schemaVersion`, `generation`, and `policies`. `schemaVersion` is integer `1`,

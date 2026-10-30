@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 import pathlib
+import json
 import subprocess
 import sys
 
 binary = pathlib.Path(sys.argv[1]).resolve()
-fixture = pathlib.Path(__file__).with_name("valid-transaction.v1").read_bytes()
-valid = subprocess.run([binary], input=fixture, capture_output=True, check=True)
-assert valid.stdout == fixture
-for invalid in (
-    fixture.replace(b"schema_version=1", b"schema_version=2"),
-    fixture.replace(b"operation=combined", b"operation=unknown"),
-    fixture.replace(b"new_root_generation=1", b"new_root_generation=01"),
-    fixture.replace(b"new_root_generation=1", b"new_root_generation=18446744073709551616"),
-    fixture.replace(b"roots.stage.v1", b"../roots"),
-    fixture.replace(b"phase=prepared", b"phase=committed"),
-    fixture.replace(b"a" * 64, b"A" * 64),
-    fixture.replace(b"schema_version=1\n", b"schema_version=1\nschema_version=1\n"),
-):
-    assert subprocess.run([binary], input=invalid, capture_output=True).returncode != 0
-print("builder transaction C17 canonical fixtures passed")
+corpus_path = pathlib.Path(__file__).with_name("transaction-vectors.json")
+corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+assert corpus["schemaVersion"] == 1
+for case in corpus["cases"]:
+    document = corpus["bases"][case["base"]]
+    for old, new in case["mutations"]:
+        assert document.count(old) == 1, (case["name"], old)
+        document = document.replace(old, new, 1)
+    completed = subprocess.run([binary], input=document.encode("ascii"), capture_output=True)
+    if case["valid"]:
+        assert completed.returncode == 0, (case["name"], completed.stderr)
+        assert completed.stdout.decode("ascii") == document, case["name"]
+    else:
+        assert completed.returncode != 0, case["name"]
+oversized = corpus["bases"]["first_enrollment"].encode("ascii") + b" " * 1024
+assert len(oversized) > 1024
+assert subprocess.run([binary], input=oversized, capture_output=True).returncode != 0
+print(f"builder transaction C17 canonical/adversarial vectors passed: {len(corpus['cases'])}")

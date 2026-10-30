@@ -166,8 +166,10 @@ struct LocalTrustState {
     policies: LoadedStore<PolicyStoreV1>,
     directory_chain: Option<Vec<FileIdentity>>,
     marker: Option<FileSnapshot>,
-    marker_status: &'static str,
-    transaction_status: &'static str,
+    marker_status: crate::builder_transaction::MarkerStatus,
+    transaction_status: crate::builder_transaction::TransactionState,
+    root_diagnostic: Option<String>,
+    policy_diagnostic: Option<String>,
 }
 
 #[derive(Debug)]
@@ -295,30 +297,23 @@ impl LocalBuilderVerificationProviderV1 {
     }
 
     pub fn status_report(&self) -> String {
-        let root = match (&self.state.roots.parsed, &self.state.roots.snapshot) {
-            (Some(store), Some(snapshot)) => format!(
-                "VALID generation={} keys={} sha256={}",
-                store.generation,
-                store.keys.len(),
-                hex(&snapshot.digest)
-            ),
-            _ => store_status(&self.state.roots),
-        };
-        let policy = match (&self.state.policies.parsed, &self.state.policies.snapshot) {
-            (Some(store), Some(snapshot)) => format!(
-                "VALID generation={} policies={} sha256={}",
-                store.generation,
-                store.policies.len(),
-                hex(&snapshot.digest)
-            ),
-            _ => store_status(&self.state.policies),
-        };
+        let root = self
+            .state
+            .root_diagnostic
+            .clone()
+            .unwrap_or_else(|| root_store_diagnostic(&self.state.roots));
+        let policy = self
+            .state
+            .policy_diagnostic
+            .clone()
+            .unwrap_or_else(|| policy_store_diagnostic(&self.state.policies));
         let configured = self.snapshot().is_some();
         format!(
-            "Builder trust provider: {}\nRoot store: {}\nPolicy store: {}\nTransaction state: {}\nCombined marker: {}\nRecovery required: {}\nIndependent trust establishment: UNVERIFIED\nRollback protection: UNVERIFIED\nBuild-origin verification: BUILD_ORIGIN_UNVERIFIED\n",
+            "Builder trust provider: {}\nRoot store: {}\nPolicy store: {}\nTransaction state: {}\nBuilder trust state: {}\nCombined marker: {}\nRecovery required: {}\nIndependent trust establishment: UNVERIFIED\nRollback protection: UNVERIFIED\nBuild-origin verification: BUILD_ORIGIN_UNVERIFIED\n",
             if configured { "CONFIGURED_READ_ONLY" } else { "UNCONFIGURED_OR_UNAVAILABLE" },
-            root, policy, self.state.transaction_status, self.state.marker_status,
-            match self.state.transaction_status { "NO_TRANSACTION" => "NO", "BUILDER_TRANSACTION_PENDING" | "BUILDER_TRANSACTION_CORRUPT" => "YES", _ => "UNKNOWN" }
+            root, policy, self.state.transaction_status.label(),
+            self.state.transaction_status.provider_label(), self.state.marker_status.label(),
+            self.state.transaction_status.recovery_label()
         )
     }
 
@@ -435,12 +430,33 @@ impl BuilderVerificationProviderV1 for LocalBuilderVerificationProviderV1 {
     }
 
     fn diagnostic_error(&self) -> Option<crate::build_attestation::AttestationError> {
-        use crate::build_attestation::AttestationError;
-        match &self.state.roots.error.as_ref()?.kind {
-            StoreErrorKind::Pending => Some(AttestationError::BuilderTransactionPending),
-            StoreErrorKind::TransactionCorrupt => Some(AttestationError::BuilderTransactionCorrupt),
-            StoreErrorKind::MarkerInconsistent => Some(AttestationError::BuilderMarkerInconsistent),
-            _ => None,
+        use crate::build_attestation::AttestationError as Error;
+        use crate::builder_transaction::TransactionState as State;
+        match self.state.marker_status {
+            crate::builder_transaction::MarkerStatus::Inconsistent => {
+                return Some(Error::BuilderMarkerInconsistent)
+            }
+            crate::builder_transaction::MarkerStatus::Unavailable => {
+                return Some(Error::BuilderGenerationMarkerUnavailable)
+            }
+            crate::builder_transaction::MarkerStatus::Unsafe => {
+                return Some(Error::BuilderGenerationMarkerUnavailable)
+            }
+            _ => {}
+        }
+        match self.state.transaction_status {
+            State::NoTransaction => None,
+            State::PreparedOldPair
+            | State::FirstStoreReplaced
+            | State::SecondStoreReplaced
+            | State::BothStoresReplaced
+            | State::CommittedPairMarkerPending
+            | State::CompleteCommit => Some(Error::BuilderTransactionPending),
+            State::RecoveryRequired => Some(Error::BuilderTransactionRecoveryRequired),
+            State::ConflictingState => Some(Error::BuilderTrustPairInconsistent),
+            State::CorruptTransaction => Some(Error::BuilderTransactionCorrupt),
+            State::UnsafeTransactionArtifact => Some(Error::BuilderTransactionUnsafe),
+            State::UnknownState => Some(Error::BuilderTrustSnapshotStale),
         }
     }
 
@@ -550,17 +566,55 @@ fn store_status<T>(store: &LoadedStore<T>) -> String {
     }
 }
 
+fn root_store_diagnostic(store: &LoadedStore<RootStoreV1>) -> String {
+    match (&store.parsed, &store.snapshot) {
+        (Some(value), Some(snapshot)) => format!(
+            "VALID generation={} keys={} sha256={}",
+            value.generation,
+            value.keys.len(),
+            hex(&snapshot.digest)
+        ),
+        _ => store_status(store),
+    }
+}
+
+fn policy_store_diagnostic(store: &LoadedStore<PolicyStoreV1>) -> String {
+    match (&store.parsed, &store.snapshot) {
+        (Some(value), Some(snapshot)) => format!(
+            "VALID generation={} policies={} sha256={}",
+            value.generation,
+            value.policies.len(),
+            hex(&snapshot.digest)
+        ),
+        _ => store_status(store),
+    }
+}
+
+fn include_store_diagnostics(
+    mut state: LocalTrustState,
+    roots: &LoadedStore<RootStoreV1>,
+    policies: &LoadedStore<PolicyStoreV1>,
+) -> LocalTrustState {
+    state.root_diagnostic = Some(root_store_diagnostic(roots));
+    state.policy_diagnostic = Some(policy_store_diagnostic(policies));
+    state
+}
+
 fn unavailable_state(error: StoreError) -> LocalTrustState {
+    use crate::builder_transaction::TransactionState as State;
     let transaction_status = match error.kind {
-        StoreErrorKind::Pending => "BUILDER_TRANSACTION_PENDING",
-        StoreErrorKind::TransactionCorrupt => "BUILDER_TRANSACTION_CORRUPT",
-        StoreErrorKind::Unsafe => "UNSAFE_OR_UNKNOWN_STATE",
-        _ => "UNAVAILABLE",
+        StoreErrorKind::Missing => State::NoTransaction,
+        StoreErrorKind::Pending => State::RecoveryRequired,
+        StoreErrorKind::TransactionCorrupt => State::CorruptTransaction,
+        StoreErrorKind::Unsafe => State::UnknownState,
+        _ => State::UnknownState,
     };
     let marker_status = if error.kind == StoreErrorKind::MarkerInconsistent {
-        "BUILDER_GENERATION_MARKER_INCONSISTENT"
+        crate::builder_transaction::MarkerStatus::Inconsistent
+    } else if error.kind == StoreErrorKind::Unsafe {
+        crate::builder_transaction::MarkerStatus::Unsafe
     } else {
-        "UNAVAILABLE"
+        crate::builder_transaction::MarkerStatus::Unavailable
     };
     LocalTrustState {
         roots: LoadedStore {
@@ -577,6 +631,8 @@ fn unavailable_state(error: StoreError) -> LocalTrustState {
         marker: None,
         marker_status,
         transaction_status,
+        root_diagnostic: None,
+        policy_diagnostic: None,
     }
 }
 
@@ -603,60 +659,129 @@ fn load_state_from_root(
         Ok(entries) => entries,
         Err(error) => return unavailable_state(error),
     };
-    for name in ["transaction.v1", "roots.stage.v1", "policies.stage.v1"] {
-        if entries.contains(name) {
-            let parser: StoreParser<()> = if name == "transaction.v1" {
-                |bytes| {
-                    crate::builder_transaction::parse_journal(bytes)
-                        .map_err(|e| StoreError::new(StoreErrorKind::TransactionCorrupt, e))?;
-                    Ok(((), 0))
-                }
-            } else {
-                |_| Ok(((), 0))
-            };
-            let artifact = read_store(&directory, name, uid, gid, parser);
-            if let Some(error) = artifact.error {
-                return unavailable_state(error);
-            }
-            return unavailable_state(StoreError::new(
-                StoreErrorKind::Pending,
-                format!("transaction artifact {name} requires recovery"),
-            ));
-        }
-    }
     let root_store = read_store::<RootStoreV1>(&directory, ROOT_FILE, uid, gid, parse_root_store);
     let policy_store =
         read_store::<PolicyStoreV1>(&directory, POLICY_FILE, uid, gid, parse_policy_store);
-    let marker = if entries.contains("state.v1") {
-        let loaded = read_store(&directory, "state.v1", uid, gid, |bytes| {
+    let marker_store = if entries.contains("state.v1") {
+        Some(read_store(&directory, "state.v1", uid, gid, |bytes| {
             let marker = crate::builder_transaction::parse_marker(bytes)
                 .map_err(|e| StoreError::new(StoreErrorKind::MarkerInconsistent, e))?;
             Ok((marker, 0))
-        });
-        let Some(value) = loaded.parsed.as_ref() else {
-            return unavailable_state(loaded.error.unwrap_or_else(|| {
-                StoreError::new(StoreErrorKind::MarkerInconsistent, "marker unavailable")
-            }));
-        };
-        let valid = root_store
-            .snapshot
-            .as_ref()
-            .zip(policy_store.snapshot.as_ref())
-            .is_some_and(|(roots, policies)| {
-                value.roots.generation == roots.generation
-                    && value.roots.digest == hex(&roots.digest)
-                    && value.policies.generation == policies.generation
-                    && value.policies.digest == hex(&policies.digest)
-            });
-        if !valid {
-            return unavailable_state(StoreError::new(
-                StoreErrorKind::MarkerInconsistent,
-                "marker does not match root/policy pair",
-            ));
-        }
-        loaded.snapshot
+        }))
     } else {
         None
+    };
+    let root_diagnostic = root_store_diagnostic(&root_store);
+    let policy_diagnostic = policy_store_diagnostic(&policy_store);
+
+    let has_transaction_artifacts = entries.contains("transaction.v1")
+        || entries.contains("roots.stage.v1")
+        || entries.contains("policies.stage.v1");
+    if has_transaction_artifacts {
+        use crate::builder_transaction::{classify, Observation, TransactionState};
+        let journal_store = entries.contains("transaction.v1").then(|| {
+            read_store(&directory, "transaction.v1", uid, gid, |bytes| {
+                crate::builder_transaction::parse_journal(bytes)
+                    .map(|journal| (journal, 0))
+                    .map_err(|error| StoreError::new(StoreErrorKind::TransactionCorrupt, error))
+            })
+        });
+        let root_stage = entries.contains("roots.stage.v1").then(|| {
+            read_store::<RootStoreV1>(&directory, "roots.stage.v1", uid, gid, parse_root_store)
+        });
+        let policy_stage = entries.contains("policies.stage.v1").then(|| {
+            read_store::<PolicyStoreV1>(
+                &directory,
+                "policies.stage.v1",
+                uid,
+                gid,
+                parse_policy_store,
+            )
+        });
+        let state = classify(
+            journal_store
+                .as_ref()
+                .map(observation_journal)
+                .unwrap_or(Observation::Absent),
+            observation_pair(&root_store),
+            observation_pair(&policy_store),
+            root_stage
+                .as_ref()
+                .map(observation_stage_pair)
+                .unwrap_or(Observation::Absent),
+            policy_stage
+                .as_ref()
+                .map(observation_stage_pair)
+                .unwrap_or(Observation::Absent),
+            marker_store
+                .as_ref()
+                .map(observation_marker)
+                .unwrap_or(Observation::Absent),
+        );
+        if !revalidate_directory_chain(&root_for_revalidation, components, &chain) {
+            return include_store_diagnostics(
+                transaction_unavailable_state(
+                    TransactionState::UnknownState,
+                    crate::builder_transaction::MarkerStatus::Unknown,
+                    StoreErrorKind::Stale,
+                    "builder trust directory changed during transaction inspection",
+                ),
+                &root_store,
+                &policy_store,
+            );
+        }
+        let marker_status = transaction_marker_status(marker_store.as_ref(), state);
+        return include_store_diagnostics(
+            transaction_unavailable_state(
+                state,
+                marker_status,
+                match state {
+                    TransactionState::CorruptTransaction => StoreErrorKind::TransactionCorrupt,
+                    TransactionState::UnsafeTransactionArtifact => StoreErrorKind::Unsafe,
+                    TransactionState::UnknownState => StoreErrorKind::Unavailable,
+                    _ => StoreErrorKind::Pending,
+                },
+                state.label(),
+            ),
+            &root_store,
+            &policy_store,
+        );
+    }
+
+    let marker = match marker_store {
+        Some(loaded) => {
+            let Some(value) = loaded.parsed.as_ref() else {
+                return include_store_diagnostics(
+                    unavailable_state(loaded.error.unwrap_or_else(|| {
+                        StoreError::new(StoreErrorKind::MarkerInconsistent, "marker unavailable")
+                    })),
+                    &root_store,
+                    &policy_store,
+                );
+            };
+            let valid = root_store
+                .snapshot
+                .as_ref()
+                .zip(policy_store.snapshot.as_ref())
+                .is_some_and(|(roots, policies)| {
+                    value.roots.generation == roots.generation
+                        && value.roots.digest == hex(&roots.digest)
+                        && value.policies.generation == policies.generation
+                        && value.policies.digest == hex(&policies.digest)
+                });
+            if !valid {
+                return include_store_diagnostics(
+                    unavailable_state(StoreError::new(
+                        StoreErrorKind::MarkerInconsistent,
+                        "marker does not match root/policy pair",
+                    )),
+                    &root_store,
+                    &policy_store,
+                );
+            }
+            loaded.snapshot
+        }
+        None => None,
     };
     let final_chain_ok = revalidate_directory_chain(&root_for_revalidation, components, &chain);
     let directory_chain = if final_chain_ok { Some(chain) } else { None };
@@ -665,15 +790,19 @@ fn load_state_from_root(
         policies: policy_store,
         directory_chain,
         marker_status: if marker.is_some() {
-            "MATCHING"
+            crate::builder_transaction::MarkerStatus::Matching
         } else {
-            "LEGACY_UNANCHORED"
+            crate::builder_transaction::MarkerStatus::LegacyUnanchored
         },
         marker,
-        transaction_status: "NO_TRANSACTION",
+        transaction_status: crate::builder_transaction::TransactionState::NoTransaction,
+        root_diagnostic: None,
+        policy_diagnostic: None,
     };
     if state.directory_chain.is_none() {
         let stale = StoreError::new(StoreErrorKind::Stale, "trust directory changed during read");
+        state.root_diagnostic = Some(root_diagnostic);
+        state.policy_diagnostic = Some(policy_diagnostic);
         state.roots = LoadedStore {
             parsed: None,
             snapshot: None,
@@ -685,6 +814,127 @@ fn load_state_from_root(
             error: Some(stale),
         };
     }
+    state
+}
+
+fn observation_pair<T>(
+    loaded: &LoadedStore<T>,
+) -> crate::builder_transaction::Observation<crate::builder_transaction::Pair> {
+    use crate::builder_transaction::{Observation, Pair};
+    if let (Some(_), Some(snapshot)) = (&loaded.parsed, &loaded.snapshot) {
+        return Observation::Valid(Pair {
+            generation: snapshot.generation,
+            digest: hex(&snapshot.digest),
+        });
+    }
+    match loaded.error.as_ref().map(|error| &error.kind) {
+        Some(StoreErrorKind::Missing) => Observation::Absent,
+        Some(StoreErrorKind::Unsafe) => Observation::Unsafe,
+        Some(StoreErrorKind::Unavailable | StoreErrorKind::Stale) | None => {
+            Observation::Unavailable
+        }
+        Some(_) => Observation::Invalid,
+    }
+}
+
+fn observation_stage_pair<T>(
+    loaded: &LoadedStore<T>,
+) -> crate::builder_transaction::Observation<crate::builder_transaction::Pair> {
+    use crate::builder_transaction::Observation;
+    if let (Some(_), Some(snapshot)) = (&loaded.parsed, &loaded.snapshot) {
+        return Observation::Valid(crate::builder_transaction::Pair {
+            generation: snapshot.generation,
+            digest: hex(&snapshot.digest),
+        });
+    }
+    match loaded.error.as_ref().map(|error| &error.kind) {
+        Some(StoreErrorKind::Unsafe) => Observation::Unsafe,
+        Some(StoreErrorKind::Unavailable | StoreErrorKind::Stale | StoreErrorKind::Missing)
+        | None => Observation::Unavailable,
+        Some(_) => Observation::Invalid,
+    }
+}
+
+fn observation_journal(
+    loaded: &LoadedStore<crate::builder_transaction::Journal>,
+) -> crate::builder_transaction::Observation<crate::builder_transaction::Journal> {
+    use crate::builder_transaction::Observation;
+    if let Some(journal) = &loaded.parsed {
+        return Observation::Valid(journal.clone());
+    }
+    match loaded.error.as_ref().map(|error| &error.kind) {
+        Some(StoreErrorKind::Unsafe) => Observation::Unsafe,
+        Some(StoreErrorKind::Unavailable | StoreErrorKind::Stale) | None => {
+            Observation::Unavailable
+        }
+        Some(StoreErrorKind::Missing) => Observation::Unavailable,
+        Some(_) => Observation::Invalid,
+    }
+}
+
+fn observation_marker(
+    loaded: &LoadedStore<crate::builder_transaction::Marker>,
+) -> crate::builder_transaction::Observation<crate::builder_transaction::Marker> {
+    use crate::builder_transaction::Observation;
+    if let Some(marker) = &loaded.parsed {
+        return Observation::Valid(marker.clone());
+    }
+    match loaded.error.as_ref().map(|error| &error.kind) {
+        Some(StoreErrorKind::Missing) => Observation::Unavailable,
+        Some(StoreErrorKind::Unsafe) => Observation::Unsafe,
+        Some(StoreErrorKind::Unavailable | StoreErrorKind::Stale) | None => {
+            Observation::Unavailable
+        }
+        Some(_) => Observation::Invalid,
+    }
+}
+
+fn marker_diagnostic_status(
+    loaded: &LoadedStore<crate::builder_transaction::Marker>,
+) -> crate::builder_transaction::MarkerStatus {
+    use crate::builder_transaction::MarkerStatus as Marker;
+    match (
+        &loaded.parsed,
+        loaded.error.as_ref().map(|error| &error.kind),
+    ) {
+        (Some(_), _) => Marker::Unknown,
+        (_, Some(StoreErrorKind::Unsafe)) => Marker::Unsafe,
+        (_, Some(StoreErrorKind::Unavailable | StoreErrorKind::Stale)) => Marker::Unavailable,
+        (_, Some(_)) => Marker::Inconsistent,
+        _ => Marker::Unknown,
+    }
+}
+
+fn transaction_marker_status(
+    loaded: Option<&LoadedStore<crate::builder_transaction::Marker>>,
+    state: crate::builder_transaction::TransactionState,
+) -> crate::builder_transaction::MarkerStatus {
+    use crate::builder_transaction::MarkerStatus as Marker;
+    use crate::builder_transaction::TransactionState as State;
+    match state {
+        State::CompleteCommit => Marker::MatchingNewPair,
+        State::BothStoresReplaced => Marker::OldPairPending,
+        State::CommittedPairMarkerPending => Marker::MissingPending,
+        State::PreparedOldPair | State::FirstStoreReplaced | State::SecondStoreReplaced => {
+            if loaded.is_some_and(|store| store.parsed.is_some()) {
+                Marker::MatchingOldPair
+            } else {
+                Marker::LegacyUnanchored
+            }
+        }
+        _ => loaded.map_or(Marker::LegacyUnanchored, marker_diagnostic_status),
+    }
+}
+
+fn transaction_unavailable_state(
+    transaction_status: crate::builder_transaction::TransactionState,
+    marker_status: crate::builder_transaction::MarkerStatus,
+    kind: StoreErrorKind,
+    message: impl Into<String>,
+) -> LocalTrustState {
+    let mut state = unavailable_state(StoreError::new(kind, message));
+    state.transaction_status = transaction_status;
+    state.marker_status = marker_status;
     state
 }
 
@@ -835,6 +1085,11 @@ fn read_store_with_hook<T, F: FnOnce()>(
     parser: StoreParser<T>,
     after_read: F,
 ) -> LoadedStore<T> {
+    let maximum = match filename {
+        "transaction.v1" => crate::builder_transaction::MAX_JOURNAL_BYTES,
+        "state.v1" => crate::builder_transaction::MAX_MARKER_BYTES,
+        _ => MAX_STORE_BYTES,
+    };
     let name = std::ffi::CString::new(filename).expect("fixed filename");
     let mut file = match open_child(directory, &name, false) {
         Ok(file) => file,
@@ -855,7 +1110,7 @@ fn read_store_with_hook<T, F: FnOnce()>(
         || before.gid() != gid
         || before.mode() & 0o7777 != 0o600
         || before.nlink() != 1
-        || before.size() > MAX_STORE_BYTES as u64
+        || before.size() > maximum as u64
     {
         return load_failure(
             StoreErrorKind::Unsafe,
@@ -864,7 +1119,7 @@ fn read_store_with_hook<T, F: FnOnce()>(
     }
     let mut bytes = Vec::new();
     if let Err(error) = (&mut file)
-        .take((MAX_STORE_BYTES + 1) as u64)
+        .take((maximum + 1) as u64)
         .read_to_end(&mut bytes)
     {
         return load_failure(StoreErrorKind::Unavailable, error.to_string());
@@ -887,7 +1142,7 @@ fn read_store_with_hook<T, F: FnOnce()>(
         }
     };
     let before_id = FileIdentity::from_meta(&before);
-    if bytes.len() > MAX_STORE_BYTES {
+    if bytes.len() > maximum {
         return load_failure(
             StoreErrorKind::Unsafe,
             format!("{filename} exceeds size limit"),
@@ -1418,9 +1673,18 @@ mod tests {
     }
 
     fn root_json(key: &[u8; 32], identity: &str, state: &str) -> Vec<u8> {
+        root_json_with_generation(key, identity, state, 3)
+    }
+
+    fn root_json_with_generation(
+        key: &[u8; 32],
+        identity: &str,
+        state: &str,
+        generation: u64,
+    ) -> Vec<u8> {
         let record = serde_json::json!({"algorithm":"Ed25519","keyId":derive_key_id(key),"publicKey":hex(key),"signerIdentity":identity,"state":state});
         serde_json::to_vec(
-            &serde_json::json!({"schemaVersion":1,"generation":3,"keyCount":1,"keys":[record]}),
+            &serde_json::json!({"schemaVersion":1,"generation":generation,"keyCount":1,"keys":[record]}),
         )
         .unwrap()
     }
@@ -1809,6 +2073,147 @@ mod tests {
     }
 
     #[test]
+    fn unsafe_journal_links_and_modes_are_classified_and_never_trusted() {
+        let tree = TempTree::new("unsafe-transaction-artifact");
+        let directory = tree.trust_dir();
+        let key = SigningKey::from_bytes(&[0x7a; 32])
+            .verifying_key()
+            .to_bytes();
+        write_store(&directory, ROOT_FILE, &root_json(&key, "signer", "active"));
+        write_store(
+            &directory,
+            POLICY_FILE,
+            &serde_json::to_vec(
+                &serde_json::json!({"schemaVersion":1,"generation":1,"policies":[]}),
+            )
+            .unwrap(),
+        );
+        let target = tree.0.join("journal-target");
+        std::fs::write(
+            &target,
+            include_bytes!("../../tests/builder-trust/valid-transaction.v1"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        std::os::unix::fs::symlink(&target, directory.join("transaction.v1")).unwrap();
+        let symlink = tree.provider();
+        assert!(symlink
+            .status_report()
+            .contains("Transaction state: UNSAFE_TRANSACTION_ARTIFACT"));
+        assert!(symlink.signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("transaction.v1")).unwrap();
+
+        std::fs::hard_link(&target, directory.join("transaction.v1")).unwrap();
+        let hard_link = tree.provider();
+        assert!(hard_link
+            .status_report()
+            .contains("Transaction state: UNSAFE_TRANSACTION_ARTIFACT"));
+        assert!(hard_link.signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("transaction.v1")).unwrap();
+
+        write_store(
+            &directory,
+            "transaction.v1",
+            include_bytes!("../../tests/builder-trust/valid-transaction.v1"),
+        );
+        std::fs::set_permissions(
+            directory.join("transaction.v1"),
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+        let unsafe_mode = tree.provider();
+        assert!(unsafe_mode
+            .status_report()
+            .contains("Transaction state: UNSAFE_TRANSACTION_ARTIFACT"));
+        assert!(unsafe_mode.signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("transaction.v1")).unwrap();
+
+        write_store(&directory, "transaction.v1", &vec![b'x'; 1025]);
+        let oversized = tree.provider();
+        assert!(oversized
+            .status_report()
+            .contains("Transaction state: UNSAFE_TRANSACTION_ARTIFACT"));
+        assert!(oversized.signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("transaction.v1")).unwrap();
+
+        write_store(&directory, "state.v1", &vec![b'x'; 513]);
+        let oversized_marker = tree.provider();
+        assert!(oversized_marker
+            .status_report()
+            .contains("Combined marker: UNSAFE"));
+        assert!(oversized_marker.signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("state.v1")).unwrap();
+
+        let roots = root_json(&key, "signer", "active");
+        let policies = serde_json::to_vec(
+            &serde_json::json!({"schemaVersion":1,"generation":1,"policies":[]}),
+        )
+        .unwrap();
+        let marker = format!(
+            "ios-unsandboxed-builder-state\nschema_version=1\nroot_generation=3\nroot_sha256={}\npolicy_generation=1\npolicy_sha256={}\n",
+            hex(&Sha256::digest(&roots)),
+            hex(&Sha256::digest(&policies)),
+        );
+        std::fs::write(&target, marker.as_bytes()).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&target, directory.join("state.v1")).unwrap();
+        let marker_symlink = tree.provider();
+        assert!(marker_symlink
+            .status_report()
+            .contains("Combined marker: UNSAFE"));
+        assert!(marker_symlink.signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("state.v1")).unwrap();
+        std::fs::hard_link(&target, directory.join("state.v1")).unwrap();
+        let marker_hardlink = tree.provider();
+        assert!(marker_hardlink
+            .status_report()
+            .contains("Combined marker: UNSAFE"));
+        assert!(marker_hardlink.signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("state.v1")).unwrap();
+        write_store(&directory, "state.v1", marker.as_bytes());
+        std::fs::set_permissions(
+            directory.join("state.v1"),
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+        let marker_mode = tree.provider();
+        assert!(marker_mode
+            .status_report()
+            .contains("Combined marker: UNSAFE"));
+        assert!(marker_mode.signer(&derive_key_id(&key)).is_none());
+    }
+
+    #[test]
+    fn directory_replacement_invalidates_transaction_reader_identity() {
+        let tree = TempTree::new("replace-transaction-directory");
+        let trust = tree.trust_dir();
+        let root = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(&tree.0)
+            .unwrap();
+        let component = std::ffi::CString::new("builder-trust").unwrap();
+        let (opened, chain) = open_trust_directory(
+            root.try_clone().unwrap(),
+            &[component.as_c_str()],
+            unsafe { libc::geteuid() },
+            unsafe { libc::getegid() },
+        )
+        .unwrap();
+        assert!(opened.metadata().unwrap().is_dir());
+        let moved = tree.0.join("builder-trust-old");
+        std::fs::rename(&trust, &moved).unwrap();
+        std::fs::create_dir(&trust).unwrap();
+        std::fs::set_permissions(&trust, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!revalidate_directory_chain(
+            &root,
+            &[component.as_c_str()],
+            &chain
+        ));
+    }
+
+    #[test]
     fn replacement_during_a_store_read_is_detected() {
         let tree = TempTree::new("replace-during-read");
         let directory_path = tree.trust_dir();
@@ -1870,16 +2275,40 @@ mod tests {
         assert!(inconsistent
             .status_report()
             .contains("BUILDER_GENERATION_MARKER_INCONSISTENT"));
+        write_store(
+            &directory,
+            "state.v1",
+            marker
+                .replace("policy_generation=1", "policy_generation=2")
+                .as_bytes(),
+        );
+        let stale_policy_generation = tree.provider();
+        assert!(stale_policy_generation
+            .signer(&derive_key_id(&key))
+            .is_none());
+        assert!(stale_policy_generation
+            .status_report()
+            .contains("BUILDER_GENERATION_MARKER_INCONSISTENT"));
+        write_store(
+            &directory,
+            "state.v1",
+            marker
+                .replace(&hex(&Sha256::digest(&policies)), &"0".repeat(64))
+                .as_bytes(),
+        );
+        let stale_policy_digest = tree.provider();
+        assert!(stale_policy_digest.signer(&derive_key_id(&key)).is_none());
+        assert!(stale_policy_digest
+            .status_report()
+            .contains("BUILDER_GENERATION_MARKER_INCONSISTENT"));
         write_store(&directory, "state.v1", marker.as_bytes());
         write_store(&directory, "roots.stage.v1", &roots);
         let pending = tree.provider();
         assert!(pending.signer(&derive_key_id(&key)).is_none());
-        assert!(pending
-            .status_report()
-            .contains("BUILDER_TRANSACTION_PENDING"));
+        assert!(pending.status_report().contains("RECOVERY_REQUIRED"));
         assert_eq!(
             pending.diagnostic_error(),
-            Some(crate::build_attestation::AttestationError::BuilderTransactionPending)
+            Some(crate::build_attestation::AttestationError::BuilderTransactionRecoveryRequired)
         );
         assert_eq!(
             std::fs::read(directory.join("roots.stage.v1")).unwrap(),
@@ -1899,6 +2328,101 @@ mod tests {
         assert_eq!(
             std::fs::read(directory.join("transaction.v1")).unwrap(),
             b"corrupt\n"
+        );
+    }
+
+    #[test]
+    fn read_only_reader_classifies_enrollment_transition_from_store_contents() {
+        let tree = TempTree::new("transaction-classifier");
+        let directory = tree.trust_dir();
+        let key = SigningKey::from_bytes(&[0x79; 32])
+            .verifying_key()
+            .to_bytes();
+        let roots = root_json_with_generation(&key, "builder-signer", "active", 1);
+        let policies = serde_json::to_vec(
+            &serde_json::json!({"schemaVersion":1,"generation":1,"policies":[]}),
+        )
+        .unwrap();
+        let journal = format!(
+            "ios-unsandboxed-builder-transaction\nschema_version=1\noperation=combined\nold_root_generation=none\nnew_root_generation=1\nold_root_sha256=none\nnew_root_sha256={}\nold_policy_generation=none\nnew_policy_generation=1\nold_policy_sha256=none\nnew_policy_sha256={}\nstage_roots=roots.stage.v1\nstage_policies=policies.stage.v1\nphase=prepared\n",
+            hex(&Sha256::digest(&roots)),
+            hex(&Sha256::digest(&policies)),
+        );
+        write_store(&directory, "roots.stage.v1", &roots);
+        write_store(&directory, "policies.stage.v1", &policies);
+        write_store(&directory, "transaction.v1", journal.as_bytes());
+
+        let other_key = SigningKey::from_bytes(&[0x7b; 32])
+            .verifying_key()
+            .to_bytes();
+        write_store(
+            &directory,
+            "roots.stage.v1",
+            &root_json_with_generation(&other_key, "different-signer", "active", 1),
+        );
+        let modified_stage = tree.provider();
+        assert!(modified_stage
+            .status_report()
+            .contains("Transaction state: CONFLICTING_STATE"));
+        assert!(modified_stage.signer(&derive_key_id(&key)).is_none());
+        write_store(&directory, "roots.stage.v1", &roots);
+
+        let prepared = tree.provider();
+        assert!(prepared
+            .status_report()
+            .contains("Transaction state: PREPARED_OLD_PAIR"));
+        assert_eq!(
+            prepared.diagnostic_error(),
+            Some(crate::build_attestation::AttestationError::BuilderTransactionPending)
+        );
+        assert!(prepared.signer(&derive_key_id(&key)).is_none());
+        assert_eq!(
+            std::fs::read(directory.join("transaction.v1")).unwrap(),
+            journal.as_bytes()
+        );
+
+        std::fs::rename(directory.join("roots.stage.v1"), directory.join(ROOT_FILE)).unwrap();
+        let first_replaced = tree.provider();
+        assert!(first_replaced
+            .status_report()
+            .contains("Transaction state: FIRST_STORE_REPLACED"));
+        assert!(first_replaced.signer(&derive_key_id(&key)).is_none());
+
+        std::fs::rename(
+            directory.join("policies.stage.v1"),
+            directory.join(POLICY_FILE),
+        )
+        .unwrap();
+        let marker_pending = tree.provider();
+        assert!(marker_pending
+            .status_report()
+            .contains("Transaction state: COMMITTED_PAIR_MARKER_PENDING"));
+        assert!(marker_pending
+            .status_report()
+            .contains("Root store: VALID generation=1"));
+        assert!(marker_pending
+            .status_report()
+            .contains("Policy store: VALID generation=1"));
+        assert!(marker_pending.signer(&derive_key_id(&key)).is_none());
+
+        let marker = format!(
+            "ios-unsandboxed-builder-state\nschema_version=1\nroot_generation=1\nroot_sha256={}\npolicy_generation=1\npolicy_sha256={}\n",
+            hex(&Sha256::digest(&roots)),
+            hex(&Sha256::digest(&policies)),
+        );
+        write_store(&directory, "state.v1", marker.as_bytes());
+        let completed = tree.provider();
+        assert!(completed
+            .status_report()
+            .contains("Transaction state: COMPLETE_COMMIT"));
+        assert_eq!(
+            completed.diagnostic_error(),
+            Some(crate::build_attestation::AttestationError::BuilderTransactionPending)
+        );
+        assert!(completed.signer(&derive_key_id(&key)).is_none());
+        assert_eq!(
+            std::fs::read(directory.join("transaction.v1")).unwrap(),
+            journal.as_bytes()
         );
     }
 

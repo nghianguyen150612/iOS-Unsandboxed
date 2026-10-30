@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "bases": {
+    "first_enrollment": "ios-unsandboxed-builder-transaction\nschema_version=1\noperation=combined\nold_root_generation=none\nnew_root_generation=1\nold_root_sha256=none\nnew_root_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nold_policy_generation=none\nnew_policy_generation=1\nold_policy_sha256=none\nnew_policy_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nstage_roots=roots.stage.v1\nstage_policies=policies.stage.v1\nphase=prepared\n",
+    "combined_update": "ios-unsandboxed-builder-transaction\nschema_version=1\noperation=combined\nold_root_generation=4\nnew_root_generation=5\nold_root_sha256=1111111111111111111111111111111111111111111111111111111111111111\nnew_root_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nold_policy_generation=7\nnew_policy_generation=8\nold_policy_sha256=2222222222222222222222222222222222222222222222222222222222222222\nnew_policy_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nstage_roots=roots.stage.v1\nstage_policies=policies.stage.v1\nphase=prepared\n"
+  },
+  "cases": [
+    {"name":"first_enrollment_combined","base":"first_enrollment","valid":true,"mutations":[]},
+    {"name":"combined_update","base":"combined_update","valid":true,"mutations":[]},
+    {"name":"root_only_update","base":"combined_update","valid":true,"mutations":[["operation=combined","operation=roots"],["new_policy_generation=8","new_policy_generation=7"],["new_policy_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","new_policy_sha256=2222222222222222222222222222222222222222222222222222222222222222"]]},
+    {"name":"policy_only_update","base":"combined_update","valid":true,"mutations":[["operation=combined","operation=policies"],["new_root_generation=5","new_root_generation=4"],["new_root_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","new_root_sha256=1111111111111111111111111111111111111111111111111111111111111111"]]},
+    {"name":"unsupported_schema","base":"first_enrollment","valid":false,"mutations":[["schema_version=1","schema_version=2"]]},
+    {"name":"duplicate_field","base":"first_enrollment","valid":false,"mutations":[["schema_version=1\n","schema_version=1\nschema_version=1\n"]]},
+    {"name":"reordered_fields","base":"first_enrollment","valid":false,"mutations":[["old_root_generation=none\nnew_root_generation=1","new_root_generation=1\nold_root_generation=none"]]},
+    {"name":"unknown_operation","base":"first_enrollment","valid":false,"mutations":[["operation=combined","operation=custom"]]},
+    {"name":"operation_change_mismatch","base":"combined_update","valid":false,"mutations":[["operation=combined","operation=roots"]]},
+    {"name":"leading_zero_generation","base":"first_enrollment","valid":false,"mutations":[["new_root_generation=1","new_root_generation=01"]]},
+    {"name":"generation_parse_overflow","base":"first_enrollment","valid":false,"mutations":[["new_root_generation=1","new_root_generation=18446744073709551616"]]},
+    {"name":"generation_transition_overflow","base":"combined_update","valid":false,"mutations":[["old_root_generation=4","old_root_generation=18446744073709551615"]]},
+    {"name":"generation_jump","base":"combined_update","valid":false,"mutations":[["new_root_generation=5","new_root_generation=6"]]},
+    {"name":"same_generation_different_digest","base":"combined_update","valid":false,"mutations":[["new_root_generation=5","new_root_generation=4"]]},
+    {"name":"increment_same_digest","base":"combined_update","valid":false,"mutations":[["new_root_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","new_root_sha256=1111111111111111111111111111111111111111111111111111111111111111"]]},
+    {"name":"invalid_absent_pair","base":"first_enrollment","valid":false,"mutations":[["old_root_sha256=none","old_root_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"]]},
+    {"name":"uppercase_digest","base":"first_enrollment","valid":false,"mutations":[["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]]},
+    {"name":"short_digest","base":"first_enrollment","valid":false,"mutations":[["new_root_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","new_root_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0"]]},
+    {"name":"unknown_stage","base":"first_enrollment","valid":false,"mutations":[["stage_roots=roots.stage.v1","stage_roots=other.stage.v1"]]},
+    {"name":"stage_path_traversal","base":"first_enrollment","valid":false,"mutations":[["stage_roots=roots.stage.v1","stage_roots=../roots.v1"]]},
+    {"name":"unsupported_phase","base":"first_enrollment","valid":false,"mutations":[["phase=prepared","phase=committed"]]},
+    {"name":"unknown_field","base":"first_enrollment","valid":false,"mutations":[["phase=prepared\n","unexpected=yes\nphase=prepared\n"]]},
+    {"name":"carriage_return","base":"first_enrollment","valid":false,"mutations":[["schema_version=1\n","schema_version=1\r\n"]]},
+    {"name":"missing_final_lf","base":"first_enrollment","valid":false,"mutations":[["phase=prepared\n","phase=prepared"]]}
+  ]
+}
