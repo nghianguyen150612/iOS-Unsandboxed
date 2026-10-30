@@ -4,6 +4,10 @@
 //! pointer-free structure. Rust owns the artifact descriptor and performs the
 //! actual Ed25519 check against the canonical P013 manifest and trust store.
 
+use crate::build_attestation::{
+    self, AttestationError, BuildOriginStatus, BuilderVerificationProviderV1,
+    UnconfiguredBuilderProviderV1, VerificationResult,
+};
 use crate::provenance::{
     self, GenerationMarkerStatus, SignatureCheck, TrustLoadError, TrustSnapshot,
 };
@@ -20,6 +24,7 @@ const COMPOSITE_ABI_VERSION: u32 = 2;
 const PATH_CAPACITY: usize = 1024;
 const MAX_ARTIFACT_SIZE: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_SIZE: usize = 8192;
+const MAX_ATTESTATION_SIZE: usize = 2 * 1024 * 1024;
 const P012_SUMMARY_ABI_VERSION: u32 = 2;
 const P012_SUMMARY_SIZE: u32 = 3376;
 const PLAN_ABI_VERSION: u32 = 1;
@@ -433,6 +438,7 @@ pub struct CompositePreviewV2 {
     pub revalidation_state: RevalidationState,
     pub failure: Option<FailureState>,
     pub detail: Option<String>,
+    pub build_attestation: Option<VerificationResult>,
     pub build_origin_verified: bool,
     pub protected_origin_known: bool,
     pub amethyst_runtime_verified: bool,
@@ -463,6 +469,7 @@ impl Default for CompositePreviewV2 {
             revalidation_state: RevalidationState::NotRun,
             failure: None,
             detail: None,
+            build_attestation: None,
             build_origin_verified: false,
             protected_origin_known: false,
             amethyst_runtime_verified: false,
@@ -508,8 +515,13 @@ impl CompositePreviewV2 {
         let scope_path = self.policy_scope_path.as_deref().unwrap_or("UNAVAILABLE");
         let failure = self.failure.map_or("NONE", FailureState::label);
         let detail = self.detail.as_deref().unwrap_or("none");
+        let attestation = self
+            .build_attestation
+            .as_ref()
+            .map(VerificationResult::render)
+            .unwrap_or_else(|| "Attestation verification: NOT_REQUESTED\n".to_owned());
         format!(
-            "Composite result ABI: v{}\nArtifact identity: {}\nMach-O classification: {}\nManifest integrity: {}\nManifest identity: {}\nEd25519 signature: {}\nTrusted publisher: {}\nPublisher identity: {}\nKey ID: {}\nKey state: {}\nTrust generation: {}\nTrust-store digest: {}\nTrust snapshot: {}\nGeneration marker: {}\nPending transaction: {}\nRollback protection: ROLLBACK_PROTECTION_UNVERIFIED\nP011 scope: {} (path={})\nP003 operational policy: DISABLED\nP003 protected-path classification: {}\nBuild origin: {}\nProtected origin: {}\nP009 Amethyst runtime: {}\nLaunch boundary: {}\nSnapshot revalidation: {}\nLaunch decision: BLOCKED\nExecution activation: DISABLED\nOperational authorization: {}\nFailure: {}\nDetail: {}\n",
+            "Composite result ABI: v{}\nArtifact identity: {}\nMach-O classification: {}\nManifest integrity: {}\nManifest identity: {}\nEd25519 signature: {}\nTrusted publisher: {}\nPublisher identity: {}\nKey ID: {}\nKey state: {}\nTrust generation: {}\nTrust-store digest: {}\nTrust snapshot: {}\nGeneration marker: {}\nPending transaction: {}\nRollback protection: ROLLBACK_PROTECTION_UNVERIFIED\nP011 scope: {} (path={})\nP003 operational policy: DISABLED\nP003 protected-path classification: {}\nBuild origin: {}\nProtected origin: {}\nP009 Amethyst runtime: {}\nLaunch boundary: {}\nSnapshot revalidation: {}\nLaunch decision: BLOCKED\nExecution activation: DISABLED\nOperational authorization: {}\nFailure: {}\nDetail: {}\n{}",
             self.abi_version,
             self.artifact_identity.label(),
             self.macho_classification.label(),
@@ -562,6 +574,7 @@ impl CompositePreviewV2 {
             },
             failure,
             detail,
+            attestation,
         )
     }
 }
@@ -622,6 +635,13 @@ struct OpenedArtifact {
 }
 
 struct OpenedManifest {
+    file: File,
+    path: PathBuf,
+    stamp: FileStamp,
+    bytes: Vec<u8>,
+}
+
+struct OpenedAttestation {
     file: File,
     path: PathBuf,
     stamp: FileStamp,
@@ -802,6 +822,62 @@ fn open_manifest(path: &Path) -> Result<OpenedManifest, FailureState> {
         stamp,
         bytes,
     })
+}
+
+fn open_attestation(path: &Path) -> Result<OpenedAttestation, AttestationError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| AttestationError::AttestationFileUnavailable)?;
+    let meta = file
+        .metadata()
+        .map_err(|_| AttestationError::AttestationFileUnavailable)?;
+    if !meta.is_file()
+        || meta.nlink() != 1
+        || meta.mode() & 0o7000 != 0
+        || meta.size() == 0
+        || meta.size() > MAX_ATTESTATION_SIZE as u64
+    {
+        return Err(AttestationError::AttestationFileUnavailable);
+    }
+    let stamp = FileStamp::from_metadata(&meta);
+    if !path_matches_stamp(path, stamp) {
+        return Err(AttestationError::AttestationFileStale);
+    }
+    let bytes = read_exact_at(&file, stamp.size as usize, MAX_ATTESTATION_SIZE)
+        .map_err(|_| AttestationError::AttestationFileUnavailable)?;
+    if FileStamp::from_metadata(
+        &file
+            .metadata()
+            .map_err(|_| AttestationError::AttestationFileStale)?,
+    ) != stamp
+        || !path_matches_stamp(path, stamp)
+    {
+        return Err(AttestationError::AttestationFileStale);
+    }
+    Ok(OpenedAttestation {
+        file,
+        path: path.to_owned(),
+        stamp,
+        bytes,
+    })
+}
+
+fn revalidate_attestation(attestation: &OpenedAttestation) -> bool {
+    let Ok(bytes) = read_exact_at(
+        &attestation.file,
+        attestation.stamp.size as usize,
+        MAX_ATTESTATION_SIZE,
+    ) else {
+        return false;
+    };
+    let Ok(meta) = attestation.file.metadata() else {
+        return false;
+    };
+    bytes == attestation.bytes
+        && FileStamp::from_metadata(&meta) == attestation.stamp
+        && path_matches_stamp(&attestation.path, attestation.stamp)
 }
 
 fn read_exact_at(file: &File, size: usize, maximum: usize) -> io::Result<Vec<u8>> {
@@ -991,6 +1067,195 @@ pub fn preview(manifest_path: &Path, artifact_path: &OsStr) -> CompositePreviewV
         &C17P012Binding,
         provenance::load_production_snapshot,
     )
+}
+
+/// Read-only P013D attestation diagnostic. The production builder provider is
+/// intentionally unconfigured until an independent root and policy exist.
+pub fn preview_attestation(attestation_path: &Path, artifact_path: &OsStr) -> CompositePreviewV2 {
+    preview_attestation_with(
+        attestation_path,
+        artifact_path,
+        &C17P012Binding,
+        &UnconfiguredBuilderProviderV1,
+    )
+}
+
+fn preview_attestation_with<B, P>(
+    attestation_path: &Path,
+    artifact_path: &OsStr,
+    binding: &B,
+    provider: &P,
+) -> CompositePreviewV2
+where
+    B: P012Binding + ?Sized,
+    P: BuilderVerificationProviderV1 + ?Sized,
+{
+    let mut output = CompositePreviewV2::default();
+    let (artifact_file, artifact_path_buf, artifact_stamp) = match open_artifact(artifact_path) {
+        Ok(opened) => opened,
+        Err(failure) => {
+            output.fail(failure, "artifact could not be safely opened");
+            return output;
+        }
+    };
+    let requested_path = artifact_path_buf.as_os_str();
+    let summary = match binding.preview(&artifact_file, requested_path) {
+        Ok(summary) => summary,
+        Err(error) => {
+            apply_binding_failure(&mut output, error);
+            return output;
+        }
+    };
+    if validate_p012_summary(&summary, requested_path.as_bytes()).is_err() {
+        output.fail(
+            FailureState::InvalidAbi,
+            "P012 v2 result contained an invalid size, enum, path, or authorization value",
+        );
+        return output;
+    }
+    output.policy_scope = match summary.scope_state {
+        1 => ScopeState::NotConfigured,
+        2 => ScopeState::Match,
+        _ => ScopeState::Unverified,
+    };
+    output.policy_scope_path = fixed_c_bytes(&summary.scope_path)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).into_owned());
+    output.protected_path = if summary.hypothetical_p003_outcome == P003_DENY_PROTECTED_PATH {
+        ProtectedPathState::KnownProtected
+    } else if summary.hypothetical_p003_outcome == 8 {
+        ProtectedPathState::Unknown
+    } else {
+        ProtectedPathState::NotClassifiedProtected
+    };
+
+    let identity = artifact_identity(&summary.artifact);
+    let artifact = OpenedArtifact {
+        file: artifact_file,
+        path: artifact_path_buf,
+        stamp: artifact_stamp,
+        identity,
+        plan: summary.artifact,
+    };
+    let plan_meta_matches = artifact.stamp.matches_plan(&artifact.plan);
+    let hash_matches = hash_open_file(&artifact.file, artifact.stamp.size)
+        .map(|digest| digest == artifact.identity.sha256)
+        .unwrap_or(false);
+    let stable = artifact
+        .file
+        .metadata()
+        .map(|meta| FileStamp::from_metadata(&meta) == artifact.stamp)
+        .unwrap_or(false)
+        && path_matches_stamp(&artifact.path, artifact.stamp);
+    if !plan_meta_matches || !hash_matches || !stable {
+        output.artifact_identity = ArtifactIdentityState::Mutated;
+        output.fail(
+            FailureState::ArtifactMutated,
+            "Rust and C did not observe stable identical descriptor bytes and metadata",
+        );
+        return output;
+    }
+    output.artifact_identity = ArtifactIdentityState::Verified;
+    output.macho_classification = classify_macho(&artifact.plan);
+
+    let mut attestation_result = match open_attestation(attestation_path) {
+        Ok(attestation) => {
+            let mut result = build_attestation::verify_bytes(
+                &attestation.bytes,
+                &artifact.identity.sha256,
+                provider,
+            );
+            let p012 = binding.revalidate(&artifact.file, &summary);
+            let artifact_state = revalidate_artifact(&artifact);
+            let attestation_current = revalidate_attestation(&attestation);
+            if !attestation_current {
+                result.invalidate_attestation_file();
+            }
+            match p012 {
+                Ok(()) => {}
+                Err(error) => {
+                    invalidate_attestation_for_artifact_error(&mut result, &mut output, error);
+                }
+            }
+            if let Err(error) = artifact_state {
+                invalidate_attestation_for_artifact_error(&mut result, &mut output, error);
+            }
+            if attestation_current
+                && artifact_state.is_ok()
+                && result.build_origin == BuildOriginStatus::Verified
+            {
+                output.build_origin_verified = true;
+            }
+            output.revalidation_state = if output.failure.is_some() {
+                output.revalidation_state
+            } else if attestation_current && artifact_state.is_ok() && p012.is_ok() {
+                RevalidationState::Current
+            } else {
+                RevalidationState::IdentityUnverified
+            };
+            result
+        }
+        Err(error) => VerificationResult {
+            artifact_sha256: Some(artifact.identity.sha256),
+            error: Some(error),
+            ..VerificationResult::default()
+        },
+    };
+    if !path_matches_identity(&artifact.path, artifact.stamp) {
+        attestation_result.invalidate_artifact_binding();
+        output.artifact_identity = ArtifactIdentityState::Replaced;
+        output.build_origin_verified = false;
+        output.revalidation_state = RevalidationState::ArtifactReplaced;
+        output.fail_stale(
+            FailureState::ArtifactReplaced,
+            "artifact pathname changed during attestation verification",
+        );
+    }
+    output.build_origin_verified = output.build_origin_verified
+        && attestation_result.build_origin == BuildOriginStatus::Verified;
+    output.build_attestation = Some(attestation_result);
+    output
+}
+
+fn invalidate_attestation_for_artifact_error(
+    result: &mut VerificationResult,
+    output: &mut CompositePreviewV2,
+    error: BindingError,
+) {
+    output.build_origin_verified = false;
+    match error {
+        BindingError::ArtifactReplaced => {
+            result.invalidate_artifact_binding();
+            output.artifact_identity = ArtifactIdentityState::Replaced;
+            output.revalidation_state = RevalidationState::ArtifactReplaced;
+            output.fail_stale(
+                FailureState::ArtifactReplaced,
+                "P012 detected pathname replacement during attestation verification",
+            );
+        }
+        BindingError::ArtifactIdentityMismatch => {
+            result.invalidate_artifact_binding();
+            output.artifact_identity = ArtifactIdentityState::Mismatch;
+            output.revalidation_state = RevalidationState::IdentityUnverified;
+            output.fail_stale(
+                FailureState::ArtifactIdentityMismatch,
+                "P012 could not establish the same descriptor identity during attestation verification",
+            );
+        }
+        BindingError::ArtifactMutated => {
+            result.invalidate_artifact_binding();
+            output.artifact_identity = ArtifactIdentityState::Mutated;
+            output.revalidation_state = RevalidationState::ArtifactMutated;
+            output.fail_stale(
+                FailureState::ArtifactMutated,
+                "artifact bytes or metadata changed during attestation verification",
+            );
+        }
+        _ => {
+            result.invalidate_composite_snapshot();
+            apply_binding_failure(output, error);
+        }
+    }
 }
 
 fn preview_with<B, F>(
@@ -1448,6 +1713,11 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build_attestation::{
+        BuildOriginStatus, BuildParametersStatus, BuilderAuthorityV1, BuilderPolicyV1,
+        BuilderTrustStatus, SignatureAlgorithmV1, SignerV1, SubjectStatus, SyntaxStatus,
+    };
+    use base64::Engine;
     use ed25519_dalek::{Signer, SigningKey};
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
@@ -1665,6 +1935,95 @@ mod tests {
         load: impl FnMut() -> Result<TrustSnapshot, TrustLoadError>,
     ) -> CompositePreviewV2 {
         preview_with(manifest, artifact.as_os_str(), &C17P012Binding, load)
+    }
+
+    struct AttestationFixtureProvider {
+        signing: SigningKey,
+        signer: SignerV1,
+        policy: BuilderPolicyV1,
+    }
+
+    impl AttestationFixtureProvider {
+        fn new() -> Self {
+            let signing = SigningKey::from_bytes(&[0x52; 32]);
+            let signer = SignerV1 {
+                identity: Some("independent-fixture-signer".to_owned()),
+                algorithm: SignatureAlgorithmV1::Ed25519,
+                public_key: signing.verifying_key().to_bytes(),
+            };
+            Self {
+                signing,
+                signer,
+                policy: BuilderPolicyV1 {
+                    builder_identity: "https://example.invalid/builders/fixture-v1".to_owned(),
+                    build_type: "https://example.invalid/buildtypes/ios-release/v1".to_owned(),
+                    external_parameters: serde_json::json!({"repository": "https://example.invalid/acme/ios-app", "revision": "0123456789abcdef0123456789abcdef01234567"}),
+                    source_uri: "git+https://example.invalid/acme/ios-app".to_owned(),
+                    trusted_revisions: ["0123456789abcdef0123456789abcdef01234567".to_owned()]
+                        .into_iter()
+                        .collect(),
+                },
+            }
+        }
+
+        fn signed_envelope(&self, artifact: &[u8]) -> Vec<u8> {
+            let statement = serde_json::json!({
+                "_type": "https://in-toto.io/Statement/v1",
+                "subject": [{"name": "fixture", "digest": {"sha256": hex(&Sha256::digest(artifact))}}],
+                "predicateType": "https://slsa.dev/provenance/v1",
+                "predicate": {
+                    "buildDefinition": {
+                        "buildType": self.policy.build_type.clone(),
+                        "externalParameters": self.policy.external_parameters.clone(),
+                        "resolvedDependencies": [{
+                            "uri": self.policy.source_uri.clone(),
+                            "digest": {"gitCommit": "0123456789abcdef0123456789abcdef01234567"},
+                        }],
+                    },
+                    "runDetails": {"builder": {"id": self.policy.builder_identity.clone()}},
+                },
+            });
+            let payload = serde_json::to_vec(&statement).unwrap();
+            let payload_type = crate::build_attestation::DSSE_PAYLOAD_TYPE.as_bytes();
+            let mut pae = b"DSSEv1 ".to_vec();
+            pae.extend_from_slice(payload_type.len().to_string().as_bytes());
+            pae.push(b' ');
+            pae.extend_from_slice(payload_type);
+            pae.push(b' ');
+            pae.extend_from_slice(payload.len().to_string().as_bytes());
+            pae.push(b' ');
+            pae.extend_from_slice(&payload);
+            let signature = self.signing.sign(&pae).to_bytes();
+            serde_json::to_vec(&serde_json::json!({
+                "payloadType": crate::build_attestation::DSSE_PAYLOAD_TYPE,
+                "payload": base64::engine::general_purpose::STANDARD.encode(payload),
+                "signatures": [{
+                    "keyid": "independent-fixture-key",
+                    "sig": base64::engine::general_purpose::STANDARD.encode(signature),
+                }],
+            }))
+            .unwrap()
+        }
+    }
+
+    impl BuilderVerificationProviderV1 for AttestationFixtureProvider {
+        fn signer(&self, key_id: &str) -> Option<SignerV1> {
+            (key_id == "independent-fixture-key").then(|| self.signer.clone())
+        }
+
+        fn builder_authority(
+            &self,
+            signer_identity: &str,
+            builder_identity: &str,
+        ) -> BuilderAuthorityV1 {
+            if signer_identity == self.signer.identity.as_deref().unwrap()
+                && builder_identity == self.policy.builder_identity
+            {
+                BuilderAuthorityV1::Trusted(self.policy.clone())
+            } else {
+                BuilderAuthorityV1::IdentityMismatch
+            }
+        }
     }
 
     #[test]
@@ -2192,6 +2551,129 @@ mod tests {
         assert_eq!(changed.manifest_state, ManifestState::Stale);
         assert_eq!(changed.signature_state, SignatureState::NotVerified);
         assert_eq!(changed.publisher_state, PublisherState::Unverified);
+    }
+
+    #[test]
+    fn attestation_composite_binds_descriptor_and_never_authorizes_without_runtime_evidence() {
+        let root = TempDir::new("attestation-composite");
+        let bytes = macho(0x0100000c);
+        let artifact = write_artifact(&root, "artifact", &bytes);
+        let attestation = root.0.join("attestation.dsse.json");
+        let provider = AttestationFixtureProvider::new();
+        fs::write(&attestation, provider.signed_envelope(&bytes)).unwrap();
+        fs::set_permissions(&attestation, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let result = preview_attestation_with(
+            &attestation,
+            artifact.as_os_str(),
+            &C17P012Binding,
+            &provider,
+        );
+        let attestation_result = result.build_attestation.as_ref().unwrap();
+        assert_eq!(result.artifact_identity, ArtifactIdentityState::Verified);
+        assert_eq!(result.revalidation_state, RevalidationState::Current);
+        assert_eq!(attestation_result.syntax, SyntaxStatus::Valid);
+        assert_eq!(
+            attestation_result.signature,
+            crate::build_attestation::SignatureStatus::Valid
+        );
+        assert_eq!(attestation_result.subject, SubjectStatus::Matched);
+        assert_eq!(
+            attestation_result.builder_trust,
+            BuilderTrustStatus::Trusted
+        );
+        assert_eq!(
+            attestation_result.build_parameters,
+            BuildParametersStatus::Accepted
+        );
+        assert_eq!(attestation_result.build_origin, BuildOriginStatus::Verified);
+        assert!(result.build_origin_verified);
+        assert!(!result.protected_origin_known);
+        assert!(!result.amethyst_runtime_verified);
+        assert!(!result.launch_boundary_implemented);
+        assert!(!result.operational_authorization);
+        let rendered = result.render();
+        assert!(rendered.contains("Attestation signature: VALID"));
+        assert!(rendered.contains("Builder identity trust: TRUSTED"));
+        assert!(rendered.contains("Protected origin: UNKNOWN"));
+        assert!(rendered.contains("P009 Amethyst runtime: UNVERIFIED"));
+        assert!(rendered.contains("Launch boundary: NOT IMPLEMENTED"));
+        assert!(rendered.contains("Execution activation: DISABLED"));
+        assert!(rendered.contains("Operational authorization: FALSE"));
+    }
+
+    #[test]
+    fn attestation_subject_is_invalidated_when_artifact_is_replaced_or_mutated() {
+        struct Replaced;
+        impl P012Binding for Replaced {
+            fn preview(&self, file: &File, path: &OsStr) -> Result<P012SummaryV2, BindingError> {
+                C17P012Binding.preview(file, path)
+            }
+            fn revalidate(
+                &self,
+                file: &File,
+                previous: &P012SummaryV2,
+            ) -> Result<(), BindingError> {
+                let path = PathBuf::from(OsStr::from_bytes(
+                    fixed_c_bytes(&previous.requested_path).ok_or(BindingError::InvalidAbi)?,
+                ));
+                let replacement = path.with_extension("replacement");
+                fs::write(&replacement, macho(0x0100000c))
+                    .map_err(|_| BindingError::P012Failure)?;
+                fs::rename(&replacement, &path).map_err(|_| BindingError::P012Failure)?;
+                C17P012Binding.revalidate(file, previous)
+            }
+        }
+        struct Mutated;
+        impl P012Binding for Mutated {
+            fn preview(&self, file: &File, path: &OsStr) -> Result<P012SummaryV2, BindingError> {
+                C17P012Binding.preview(file, path)
+            }
+            fn revalidate(
+                &self,
+                file: &File,
+                previous: &P012SummaryV2,
+            ) -> Result<(), BindingError> {
+                let path = PathBuf::from(OsStr::from_bytes(
+                    fixed_c_bytes(&previous.requested_path).ok_or(BindingError::InvalidAbi)?,
+                ));
+                fs::write(&path, b"changed descriptor bytes")
+                    .map_err(|_| BindingError::P012Failure)?;
+                C17P012Binding.revalidate(file, previous)
+            }
+        }
+
+        for (label, binding, expected) in [
+            (
+                "replaced",
+                &Replaced as &dyn P012Binding,
+                ArtifactIdentityState::Replaced,
+            ),
+            (
+                "mutated",
+                &Mutated as &dyn P012Binding,
+                ArtifactIdentityState::Mutated,
+            ),
+        ] {
+            let root = TempDir::new(label);
+            let bytes = macho(0x0100000c);
+            let artifact = write_artifact(&root, "artifact", &bytes);
+            let attestation = root.0.join("attestation.dsse.json");
+            let provider = AttestationFixtureProvider::new();
+            fs::write(&attestation, provider.signed_envelope(&bytes)).unwrap();
+            fs::set_permissions(&attestation, fs::Permissions::from_mode(0o600)).unwrap();
+            let result =
+                preview_attestation_with(&attestation, artifact.as_os_str(), binding, &provider);
+            let attestation_result = result.build_attestation.as_ref().unwrap();
+            assert_eq!(result.artifact_identity, expected);
+            assert_eq!(attestation_result.subject, SubjectStatus::StaleArtifact);
+            assert_eq!(
+                attestation_result.build_origin,
+                BuildOriginStatus::Unverified
+            );
+            assert!(!result.build_origin_verified);
+            assert!(!result.operational_authorization);
+        }
     }
 
     #[test]

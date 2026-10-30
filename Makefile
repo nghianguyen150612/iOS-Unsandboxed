@@ -17,7 +17,7 @@ LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test authenticated-binding-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -30,6 +30,7 @@ help:
 	  'make provenance-test Run evidence and trust-boundary fixtures' \
 	  'make launch-binding-test Run identity and scope fixtures' \
 	  'make authenticated-binding-test Run descriptor-bound authenticated preview fixtures' \
+	  'make build-attestation-test Run DSSE/SLSA verification and P013C binding fixtures' \
 	  'make trust-provider-test Run signed-manifest and trust-anchor fixtures' \
 	  'make origin-policy-test Run fail-closed origin-policy fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
@@ -66,6 +67,7 @@ test: host-build
 	$(MAKE) provenance-test
 	$(MAKE) launch-binding-test
 	$(MAKE) authenticated-binding-test
+	$(MAKE) build-attestation-test
 	$(MAKE) trust-provider-test
 	$(MAKE) trust-format-test
 	$(MAKE) trust-manager-test
@@ -193,6 +195,12 @@ authenticated-binding-test:
 	  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
 	    python3 tests/authenticated-binding/abi-fixtures.py build/host/authenticated-binding-abi-sanitized-test; \
 	else echo 'Authenticated-binding sanitizers unavailable; strict C17 ABI fixture run completed.'; fi
+
+build-attestation-test:
+	cargo test --locked --workspace build_attestation::tests::
+	cargo test --locked --workspace authenticated_binding::tests::attestation
+	cargo build --locked --workspace
+	python3 tests/attestation/cli-test.py target/debug/ios-unsandboxed
 
 trust-provider-test:
 	cargo test --locked --workspace provenance::tests::

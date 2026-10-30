@@ -4,6 +4,7 @@ use std::fs;
 use std::process::ExitCode;
 
 mod authenticated_binding;
+mod build_attestation;
 mod ipc;
 mod planner;
 mod provenance;
@@ -21,6 +22,8 @@ Commands:\n\
                                  Verify signed evidence (read-only)\n\
   provenance plan <manifest> <binary>\n\
                                  Preview descriptor-bound authenticated provenance\n\
+  provenance attestation verify <attestation> <binary>\n\
+                                 Verify signed build evidence (read-only)\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
   install <binary>               Install a binary (not implemented)\n\
@@ -46,6 +49,7 @@ enum Invocation {
     Plan(OsString),
     ProvenanceVerify(OsString, OsString),
     ProvenancePlan(OsString, OsString),
+    ProvenanceAttestationVerify(OsString, OsString),
     ReservedCommand(&'static str),
 }
 
@@ -118,6 +122,18 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
                 && !args[3].is_empty() =>
         {
             Ok(Invocation::ProvenancePlan(args[2].clone(), args[3].clone()))
+        }
+        "provenance"
+            if args.len() == 5
+                && args[1] == OsStr::new("attestation")
+                && args[2] == OsStr::new("verify")
+                && !args[3].is_empty()
+                && !args[4].is_empty() =>
+        {
+            Ok(Invocation::ProvenanceAttestationVerify(
+                args[3].clone(),
+                args[4].clone(),
+            ))
         }
         "install" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::ReservedCommand("install"))
@@ -193,6 +209,18 @@ fn main() -> ExitCode {
             let result = authenticated_binding::preview(std::path::Path::new(&manifest), &artifact);
             print!("{}", result.render());
             if result.diagnostic_success() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(4)
+            }
+        }
+        Ok(Invocation::ProvenanceAttestationVerify(attestation, artifact)) => {
+            let result = authenticated_binding::preview_attestation(
+                std::path::Path::new(&attestation),
+                &artifact,
+            );
+            print!("{}", result.render());
+            if result.build_origin_verified {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(4)
@@ -710,6 +738,19 @@ mod tests {
             parse_args(&args(&["provenance", "plan", "./manifest", "./binary"])),
             Ok(Invocation::ProvenancePlan(
                 OsString::from("./manifest"),
+                OsString::from("./binary")
+            ))
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "attestation",
+                "verify",
+                "./attestation.dsse.json",
+                "./binary",
+            ])),
+            Ok(Invocation::ProvenanceAttestationVerify(
+                OsString::from("./attestation.dsse.json"),
                 OsString::from("./binary")
             ))
         );

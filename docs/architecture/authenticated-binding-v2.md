@@ -10,6 +10,8 @@ P013C adds a compact pointer-free C summary and a typed Rust composite preview. 
 
 The C structure does not contain Ed25519 status and cannot be forged into cryptographic proof. The trusted in-process Rust entry point owns the composition and derives all cryptographic states from manifest bytes and the hardened production trust reader. The Rust result has `abi_version = 2`; its typed Rust enums are not a second serialized C ABI.
 
+P013D-1 extends the Rust composite provider with an optional typed build-attestation result. `iu provenance attestation verify ATTESTATION ARTIFACT` retains the same opened artifact descriptor through P012/P010 inspection, Rust SHA-256, subject comparison, and final revalidation. DSSE signature verification uses the exact decoded payload bytes and an independent versioned builder provider. No attestation fields or trust booleans are added to the C ABI. The production builder provider is empty, so this integration cannot report build origin verified in production.
+
 ## Identity and revalidation contract
 
 The Rust provider opens the artifact once using no-follow flags. P010's new `iu_execution_plan_create_fd_v2` uses that borrowed descriptor for Mach-O parsing and SHA-256, while retaining its secure path walk to obtain canonical path identity and reject replacement. P012 compares the descriptor facts with P010 and performs its normal pathname/policy revalidation. Rust uses `pread`-style `read_at` for its own digest and does not move the file offset. The Rust and C observations must agree on digest and all recorded identity metadata before manifest verification proceeds.
@@ -21,3 +23,5 @@ P012 revalidation distinguishes same object, pathname replacement, object modifi
 ## Authorization invariant
 
 ABI v2 fixes the launch boundary to `NOT_IMPLEMENTED`; both C and Rust reject nonzero operational authorization. P003 remains operationally disabled. A `Current` revalidation means only that the snapshot survived its final checks. It cannot be reused as a bearer token or used to launch a process.
+
+An attestation result does not change that invariant. Protected origin remains `UNKNOWN`, Amethyst runtime remains `UNVERIFIED`, `execution_activation` remains disabled, and operational authorization remains false.
