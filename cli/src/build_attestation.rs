@@ -2,8 +2,9 @@
 //!
 //! This module implements a bounded profile. DSSE's signature algorithm is
 //! supplied by the independent versioned provider, never selected by payload
-//! fields. Production starts with an empty provider and therefore does not
-//! trust publisher keys or unknown builders.
+//! fields. Production uses a separate local builder root/policy provider and
+//! never imports publisher trust; local installation alone cannot establish
+//! independent enrollment trust.
 
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use base64::Engine;
@@ -56,6 +57,7 @@ pub enum SignatureStatus {
     Valid,
     Invalid,
     UnknownSigner,
+    RevokedSigner,
     UnsupportedAlgorithm,
     Truncated,
 }
@@ -67,6 +69,7 @@ impl SignatureStatus {
             Self::Valid => "VALID",
             Self::Invalid => "INVALID",
             Self::UnknownSigner => "UNKNOWN_SIGNER",
+            Self::RevokedSigner => "REVOKED_SIGNER",
             Self::UnsupportedAlgorithm => "UNSUPPORTED_ALGORITHM",
             Self::Truncated => "TRUNCATED",
         }
@@ -168,6 +171,38 @@ pub enum BuildOriginStatus {
     Rejected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustSnapshotStatus {
+    Unavailable,
+    Consistent,
+    Stale,
+}
+
+impl TrustSnapshotStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Unavailable => "UNAVAILABLE",
+            Self::Consistent => "CONSISTENT",
+            Self::Stale => "STALE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustEstablishmentStatus {
+    Verified,
+    Unverified,
+}
+
+impl TrustEstablishmentStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Verified => "VERIFIED",
+            Self::Unverified => "UNVERIFIED",
+        }
+    }
+}
+
 impl BuildOriginStatus {
     fn label(self) -> &'static str {
         match self {
@@ -194,6 +229,7 @@ pub enum AttestationError {
     SubjectMismatch,
     SubjectAmbiguous,
     UnknownSigner,
+    RevokedSigner,
     SignerIdentityUnverified,
     InvalidSignature,
     UnsupportedSignatureAlgorithm,
@@ -226,6 +262,7 @@ impl AttestationError {
             Self::SubjectMismatch => "SUBJECT_DIGEST_MISMATCH",
             Self::SubjectAmbiguous => "SUBJECT_AMBIGUOUS",
             Self::UnknownSigner => "UNKNOWN_SIGNER",
+            Self::RevokedSigner => "REVOKED_SIGNER",
             Self::SignerIdentityUnverified => "SIGNER_IDENTITY_UNVERIFIED",
             Self::InvalidSignature => "SIGNATURE_INVALID",
             Self::UnsupportedSignatureAlgorithm => "UNSUPPORTED_SIGNATURE_ALGORITHM",
@@ -258,6 +295,12 @@ pub struct VerificationResult {
     pub source_revision: Option<String>,
     pub build_type: Option<String>,
     pub build_parameters: BuildParametersStatus,
+    pub signer_key_id: Option<String>,
+    pub signer_identity_value: Option<String>,
+    pub applicable_policy_identity: Option<String>,
+    pub trust_snapshot: Option<crate::builder_trust::BuilderTrustSnapshotV1>,
+    pub trust_snapshot_status: TrustSnapshotStatus,
+    pub independent_trust_establishment: TrustEstablishmentStatus,
     pub build_origin: BuildOriginStatus,
     pub error: Option<AttestationError>,
 }
@@ -276,6 +319,12 @@ impl Default for VerificationResult {
             source_revision: None,
             build_type: None,
             build_parameters: BuildParametersStatus::NotChecked,
+            signer_key_id: None,
+            signer_identity_value: None,
+            applicable_policy_identity: None,
+            trust_snapshot: None,
+            trust_snapshot_status: TrustSnapshotStatus::Unavailable,
+            independent_trust_establishment: TrustEstablishmentStatus::Unverified,
             build_origin: BuildOriginStatus::Unverified,
             error: None,
         }
@@ -308,19 +357,56 @@ impl VerificationResult {
             .map(escape_text)
             .unwrap_or_else(|| "UNAVAILABLE".to_owned());
         let error = self.error.map_or("NONE", AttestationError::label);
+        let snapshot = self
+            .trust_snapshot
+            .as_ref()
+            .map_or_else(|| "UNAVAILABLE".to_owned(), |value| value.render());
+        let signer_key_id = self
+            .signer_key_id
+            .as_deref()
+            .map(escape_text)
+            .unwrap_or_else(|| "UNAVAILABLE".to_owned());
+        let signer_identity_value = self
+            .signer_identity_value
+            .as_deref()
+            .map(escape_text)
+            .unwrap_or_else(|| "UNAVAILABLE".to_owned());
+        let policy_id = self
+            .applicable_policy_identity
+            .as_deref()
+            .map(escape_text)
+            .unwrap_or_else(|| "UNAVAILABLE".to_owned());
+        let policy_status = match self.builder_trust {
+            BuilderTrustStatus::Trusted
+                if self.build_parameters == BuildParametersStatus::Accepted =>
+            {
+                "ACCEPTED"
+            }
+            BuilderTrustStatus::Trusted => "REJECTED",
+            BuilderTrustStatus::Unknown | BuilderTrustStatus::NotChecked => "UNCONFIGURED",
+            BuilderTrustStatus::Untrusted | BuilderTrustStatus::IdentityMismatch => "REJECTED",
+        };
         format!(
-            "Attestation syntax: {}\nAttestation signature: {}\nSigner identity verified: {}\nAttestation subject: {} (artifact_sha256={})\nBuilder identity claimed: {}\nBuilder identity trust: {}\nSource revision: {} (uri={})\nBuild type: {}\nBuild parameters accepted: {}\nBuild-origin verification: {}\nAttestation error: {}\n",
+            "Attestation syntax: {}\nAttestation signature: {}\nSigner identity: {} ({})\nSigner key ID: {}\nAttestation subject: {} (artifact_sha256={})\nBuilder identity claimed: {}\nBuilder identity trust: {}\nBuilder authority: {}\nBuilder policy: {} ({})\nSource revision: {} (uri={})\nBuild type: {}\nBuild parameters accepted: {}\nTrust snapshot: {} ({})\nIndependent trust establishment: {}\nBuild-origin verification: {}\nAttestation error: {}\n",
             self.syntax.label(),
             self.signature.label(),
             self.signer_identity.label(),
+            signer_identity_value,
+            signer_key_id,
             self.subject.label(),
             digest,
             builder,
             self.builder_trust.label(),
+            self.builder_trust.label(),
+            policy_status,
+            policy_id,
             source,
             source_uri,
             build_type,
             self.build_parameters.label(),
+            self.trust_snapshot_status.label(),
+            snapshot,
+            self.independent_trust_establishment.label(),
             self.build_origin.label(),
             error,
         )
@@ -338,6 +424,11 @@ impl VerificationResult {
         self.signer_identity = SignerIdentityStatus::NotChecked;
         self.subject = SubjectStatus::StaleAttestation;
         self.builder_identity_claimed = None;
+        self.signer_key_id = None;
+        self.signer_identity_value = None;
+        self.applicable_policy_identity = None;
+        self.trust_snapshot = None;
+        self.trust_snapshot_status = TrustSnapshotStatus::Unavailable;
         self.builder_trust = BuilderTrustStatus::NotChecked;
         self.source_uri = None;
         self.source_revision = None;
@@ -348,6 +439,17 @@ impl VerificationResult {
     }
 
     pub(crate) fn invalidate_composite_snapshot(&mut self) {
+        self.build_origin = BuildOriginStatus::Unverified;
+        self.error = Some(AttestationError::CompositeSnapshotStale);
+    }
+
+    pub(crate) fn invalidate_trust_snapshot(&mut self) {
+        self.trust_snapshot_status = TrustSnapshotStatus::Stale;
+        self.signer_identity = SignerIdentityStatus::Unverified;
+        self.signer_identity_value = None;
+        self.builder_trust = BuilderTrustStatus::Unknown;
+        self.applicable_policy_identity = None;
+        self.build_parameters = BuildParametersStatus::Rejected;
         self.build_origin = BuildOriginStatus::Unverified;
         self.error = Some(AttestationError::CompositeSnapshotStale);
     }
@@ -380,7 +482,7 @@ pub struct BuilderPolicyV1 {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // Production has no roots in P013D-1; the other states are provider outcomes.
+#[allow(dead_code)] // Production outcomes are supplied by the local D2A provider.
 pub enum BuilderAuthorityV1 {
     Trusted(BuilderPolicyV1),
     Untrusted,
@@ -398,16 +500,42 @@ pub trait BuilderVerificationProviderV1 {
 
     fn signer(&self, key_id: &str) -> Option<SignerV1>;
 
+    fn signer_revoked(&self, _key_id: &str) -> bool {
+        false
+    }
+
     fn builder_authority(
         &self,
         signer_identity: &str,
         builder_identity: &str,
     ) -> BuilderAuthorityV1;
+
+    /// Snapshot metadata is diagnostic context only and never authorizes use.
+    fn trust_snapshot(&self) -> Option<crate::builder_trust::BuilderTrustSnapshotV1> {
+        None
+    }
+
+    /// Providers with mutable backing stores must re-read and compare them.
+    fn revalidate_trust_snapshot(&self) -> bool {
+        true
+    }
+
+    fn policy_identity(&self, _signer_identity: &str, _builder_identity: &str) -> Option<String> {
+        None
+    }
+
+    /// Synthetic providers may model an independently reviewed enrollment
+    /// chain. The local D2A provider intentionally always returns false.
+    fn independent_trust_established(&self) -> bool {
+        false
+    }
 }
 
-/// Production deliberately has no builder roots in P013D-1. It never enrolls
-/// keys and returns no trusted signer or builder authority.
+/// Explicit no-configuration fallback. The production composite uses the
+/// separate local provider, which still fails closed without provisioned
+/// roots and cannot establish independent enrollment trust.
 #[derive(Debug, Default, Clone, Copy)]
+#[allow(dead_code)] // Retained as the explicit fail-closed no-configuration provider.
 pub struct UnconfiguredBuilderProviderV1;
 
 impl BuilderVerificationProviderV1 for UnconfiguredBuilderProviderV1 {
@@ -546,11 +674,27 @@ pub(crate) fn verify_bytes<P: BuilderVerificationProviderV1 + ?Sized>(
     };
 
     let signer = provider.signer(key_id);
+    result.signer_key_id = signer.as_ref().map(|_| key_id.to_owned());
+    result.signer_identity_value = signer.as_ref().and_then(|signer| signer.identity.clone());
+    result.trust_snapshot = provider.trust_snapshot();
+    result.trust_snapshot_status = if result.trust_snapshot.is_some() {
+        TrustSnapshotStatus::Consistent
+    } else {
+        TrustSnapshotStatus::Unavailable
+    };
     match signer.as_ref() {
         None => {
-            result.signature = SignatureStatus::UnknownSigner;
+            result.signature = if provider.signer_revoked(key_id) {
+                SignatureStatus::RevokedSigner
+            } else {
+                SignatureStatus::UnknownSigner
+            };
             result.signer_identity = SignerIdentityStatus::Unknown;
-            result.error = Some(AttestationError::UnknownSigner);
+            result.error = Some(if provider.signer_revoked(key_id) {
+                AttestationError::RevokedSigner
+            } else {
+                AttestationError::UnknownSigner
+            });
         }
         Some(signer) if signer.algorithm != SignatureAlgorithmV1::Ed25519 => {
             result.signature = SignatureStatus::UnsupportedAlgorithm;
@@ -669,13 +813,27 @@ pub(crate) fn verify_bytes<P: BuilderVerificationProviderV1 + ?Sized>(
                 return result;
             }
             result.builder_trust = BuilderTrustStatus::Trusted;
+            result.applicable_policy_identity =
+                provider.policy_identity(signer_identity, builder_identity);
             match check_build_parameters(parsed_statement.statement, &policy) {
                 Ok(()) => {
                     result.build_parameters = BuildParametersStatus::Accepted;
-                    result.build_origin = if result.subject == SubjectStatus::Matched {
+                    if !provider.revalidate_trust_snapshot() {
+                        result.invalidate_trust_snapshot();
+                        return result;
+                    }
+                    result.independent_trust_establishment =
+                        if provider.independent_trust_established() {
+                            TrustEstablishmentStatus::Verified
+                        } else {
+                            TrustEstablishmentStatus::Unverified
+                        };
+                    result.build_origin = if result.subject == SubjectStatus::Matched
+                        && provider.independent_trust_established()
+                    {
                         BuildOriginStatus::Verified
                     } else {
-                        BuildOriginStatus::Rejected
+                        BuildOriginStatus::Unverified
                     };
                 }
                 Err(AttestationError::UnexpectedBuildParameters) => {
@@ -1129,7 +1287,10 @@ impl<'de> Visitor<'de> for ValueVisitor<'_> {
     }
 }
 
-fn parse_bounded_json(bytes: &[u8], max_string: usize) -> Result<Value, serde_json::Error> {
+pub(crate) fn parse_bounded_json(
+    bytes: &[u8],
+    max_string: usize,
+) -> Result<Value, serde_json::Error> {
     let mut budget = ParseBudget {
         nodes: 0,
         max_string,
@@ -1242,6 +1403,10 @@ mod tests {
                 None => BuilderAuthorityV1::Untrusted,
             }
         }
+
+        fn independent_trust_established(&self) -> bool {
+            true
+        }
     }
 
     fn descriptor_digest() -> [u8; 32] {
@@ -1291,6 +1456,23 @@ mod tests {
         assert_eq!(result.build_origin, BuildOriginStatus::Verified);
         assert_eq!(result.source_revision.as_deref(), Some(REVISION));
         assert_eq!(result.build_type.as_deref(), Some(BUILD_TYPE));
+    }
+
+    #[test]
+    fn exact_external_parameters_compare_structurally_across_json_key_order() {
+        let provider = FixtureProvider::trusted();
+        let statement = statement_json(&hex(&descriptor_digest()), REVISION);
+        let canonical = String::from_utf8(serde_json::to_vec(&statement).unwrap()).unwrap();
+        let reordered = canonical.replace(
+            "\"externalParameters\":{\"repository\":\"git+https://example.invalid/acme/ios-app\",\"revision\":\"0123456789abcdef0123456789abcdef01234567\"}",
+            "\"externalParameters\":{\"revision\":\"0123456789abcdef0123456789abcdef01234567\",\"repository\":\"git+https://example.invalid/acme/ios-app\"}",
+        );
+        assert_ne!(canonical, reordered);
+        let envelope = provider.signed_envelope(reordered.as_bytes(), DSSE_PAYLOAD_TYPE);
+        let result = verify_bytes(&envelope, &descriptor_digest(), &provider);
+        assert_eq!(result.signature, SignatureStatus::Valid);
+        assert_eq!(result.build_parameters, BuildParametersStatus::Accepted);
+        assert_eq!(result.build_origin, BuildOriginStatus::Verified);
     }
 
     #[test]

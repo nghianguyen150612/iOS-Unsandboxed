@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod authenticated_binding;
 mod build_attestation;
+mod builder_trust;
 mod ipc;
 mod planner;
 mod provenance;
@@ -24,6 +25,12 @@ Commands:\n\
                                  Preview descriptor-bound authenticated provenance\n\
   provenance attestation verify <attestation> <binary>\n\
                                  Verify signed build evidence (read-only)\n\
+  provenance builder-trust status\n\
+                                 Show read-only local builder trust status\n\
+  provenance builder-trust list\n\
+                                 List signer identities and policy references\n\
+  provenance builder-trust inspect <signer-id>\n\
+                                 Inspect one builder signer identity\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
   install <binary>               Install a binary (not implemented)\n\
@@ -50,6 +57,9 @@ enum Invocation {
     ProvenanceVerify(OsString, OsString),
     ProvenancePlan(OsString, OsString),
     ProvenanceAttestationVerify(OsString, OsString),
+    BuilderTrustStatus,
+    BuilderTrustList,
+    BuilderTrustInspect(OsString),
     ReservedCommand(&'static str),
 }
 
@@ -134,6 +144,29 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
                 args[3].clone(),
                 args[4].clone(),
             ))
+        }
+        "provenance"
+            if args.len() == 3
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("status") =>
+        {
+            Ok(Invocation::BuilderTrustStatus)
+        }
+        "provenance"
+            if args.len() == 3
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("list") =>
+        {
+            Ok(Invocation::BuilderTrustList)
+        }
+        "provenance"
+            if args.len() == 4
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("inspect")
+                && !args[3].is_empty()
+                && args[3].to_str().is_some() =>
+        {
+            Ok(Invocation::BuilderTrustInspect(args[3].clone()))
         }
         "install" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::ReservedCommand("install"))
@@ -225,6 +258,28 @@ fn main() -> ExitCode {
             } else {
                 ExitCode::from(4)
             }
+        }
+        Ok(Invocation::BuilderTrustStatus) => {
+            print!(
+                "{}",
+                builder_trust::LocalBuilderVerificationProviderV1::production().status_report()
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Invocation::BuilderTrustList) => {
+            print!(
+                "{}",
+                builder_trust::LocalBuilderVerificationProviderV1::production().list_report()
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Invocation::BuilderTrustInspect(signer_id)) => {
+            print!(
+                "{}",
+                builder_trust::LocalBuilderVerificationProviderV1::production()
+                    .inspect_report(signer_id.to_str().expect("UTF-8 checked by parser"))
+            );
+            ExitCode::SUCCESS
         }
         Ok(Invocation::ReservedCommand(command)) => {
             eprintln!(
@@ -754,6 +809,26 @@ mod tests {
                 OsString::from("./binary")
             ))
         );
+        assert_eq!(
+            parse_args(&args(&["provenance", "builder-trust", "status"])),
+            Ok(Invocation::BuilderTrustStatus)
+        );
+        assert_eq!(
+            parse_args(&args(&["provenance", "builder-trust", "list"])),
+            Ok(Invocation::BuilderTrustList)
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "builder-trust",
+                "inspect",
+                "signer-ci-v1"
+            ])),
+            Ok(Invocation::BuilderTrustInspect(OsString::from(
+                "signer-ci-v1"
+            )))
+        );
+        assert!(parse_args(&args(&["provenance", "builder-trust", "inspect", ""])).is_err());
         assert_eq!(
             parse_args(&args(&["install", "./binary"])),
             Ok(Invocation::ReservedCommand("install"))

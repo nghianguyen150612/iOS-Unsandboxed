@@ -21,6 +21,8 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Run trust transaction recovery and interruption fixtures
         run: make trust-recovery-test
+      - name: Run the builder trust store and policy fixtures
+        run: make builder-trust-test
       - name: Run Rust, native, provenance, launch binding, policy, IPC, packaging, installer, and smoke tests
         run: make test
 

@@ -25,11 +25,13 @@ The typed result reports syntax, signature validity, signer identity, subject ma
 
 P013C supplies the descriptor-derived SHA-256 only after C/P010 inspection and Rust hashing agree on the same opened artifact. It revalidates that descriptor and the attestation file before returning. A replaced or mutated artifact invalidates the subject binding. The attestation command does not reopen the artifact pathname for its digest.
 
-The production provider currently has no independently authenticated builder root or signer mapping. Production therefore reports an unknown signer/builder authority and `BUILD_ORIGIN_UNVERIFIED`; it does not enroll keys or reuse the P013 publisher trust store. Deterministic synthetic roots exist only in host tests. Builder enrollment and lifecycle are deferred to P013D-2.
+P013D-2A replaces the empty production provider with a read-only `LocalBuilderVerificationProviderV1` over the separate local builder root and policy files. No keys are embedded or automatically provisioned. If an administrator has installed a valid root and exact policy, the verifier can authenticate the Ed25519 DSSE signature and report that the key/policy matched; a recognized signer without a policy is untrusted. Publisher roots are never reused.
+
+Local installation alone does not independently authenticate the real-world identity of a CI system. Until P013D-2B provides a reviewed enrollment chain, production reports `Independent trust establishment: UNVERIFIED` and `BUILD_ORIGIN_UNVERIFIED`, even for a valid matching local key and policy. Root and policy snapshot digests/generations are re-read and checked before return, but local generation values do not prevent adversarial rollback. The schemas and limitations are described in [builder trust storage](builder-trust-storage.md), [builder policy schema](builder-policy-schema.md), and [the builder trust contract](builder-trust-contract.md).
 
 Publisher-authenticated claims remain distinct from an independently trusted builder attestation. A source revision recorded in the predicate remains a claim until it matches an independently trusted source policy. Reproducible-build evidence is not produced here. Protected-origin classification remains `UNKNOWN` and cannot be inferred from an attestation. No SLSA level is claimed.
 
-The diagnostic is `iu provenance attestation verify ATTESTATION ARTIFACT`. It does not contact the daemon or mutate system trust. `Amethyst runtime: UNVERIFIED`, `Launch boundary: NOT IMPLEMENTED`, `Execution activation: DISABLED`, and `Operational authorization: FALSE` remain fixed. Physical-device validation is NOT RUN.
+The diagnostics are `iu provenance attestation verify ATTESTATION ARTIFACT` and `iu provenance builder-trust status|list|inspect`. They do not contact the daemon or mutate system trust. `Protected origin: UNKNOWN`, `Amethyst runtime: UNVERIFIED`, `Launch boundary: NOT IMPLEMENTED`, `Execution activation: DISABLED`, and `Operational authorization: FALSE` remain fixed. Physical-device validation is NOT RUN.
 
 ## Specification references
 

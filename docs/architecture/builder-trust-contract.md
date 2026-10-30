@@ -16,10 +16,16 @@ An accepted policy includes:
 
 The verifier keeps these statuses independent: `SIGNATURE_VALID`, `SIGNER_IDENTITY_VERIFIED`, `BUILDER_IDENTITY_CLAIMED`, `BUILDER_IDENTITY_TRUSTED`, `BUILD_PARAMETERS_ACCEPTED`, and `BUILD_ORIGIN_VERIFIED`. They represent different checks. A signature may be valid while the signer identity is unknown; a verified signer may claim an unknown or untrusted builder; a trusted builder may provide unacceptable parameters; and a policy-accepted statement still needs an exact descriptor subject match before origin is verified.
 
-## Production behavior in P013D-1
+## Production behavior in P013D-2A
 
-No independently authenticated production builder root is configured. `UnconfiguredBuilderProviderV1` returns no signer keys and no trusted builder policy. The production CLI therefore fails closed with `UNKNOWN_SIGNER`, unknown builder authority, and `BUILD_ORIGIN_UNVERIFIED`. It never consults or modifies the publisher store.
+`LocalBuilderVerificationProviderV1` reads the separate, administrator-provisioned `roots.v1` and `policies.v1` files under `/var/lib/ios-unsandboxed/builder-trust/` (using `/private/var` on iOS). It does not create either file. Missing or malformed roots fail closed; a recognized signer with no valid policy remains untrusted. Revoked keys are never returned as usable signers. The production default contains zero embedded keys and does not read the publisher store.
 
-Host tests use deterministic synthetic Ed25519 keys and builder policies. Those fixtures are compiled only into the test module; no CLI option, environment variable, or production configuration selects them. Their successful verification demonstrates code behavior only and is not production builder verification.
+Local roots bind an exact Ed25519 key ID and public key to one exact signer identity. Policies separately bind that identity to exact builder IDs, build types, complete external-parameter objects, source URIs, and explicitly allowed full Git revisions. The DSSE key ID is only a lookup hint. Structural parameter equality rejects missing or extra fields.
 
-Production trust requires an independently authenticated root, a reviewed mapping from root to signer identities and builder IDs, key rotation and revocation semantics, rollback-resistant lifecycle, and reviewed build-type/source/parameter policy. Those enrollment and lifecycle tasks are deferred to P013D-2. No GitHub Actions authenticity is asserted, and no SLSA level is claimed.
+The read-only provider reports root/policy generations and SHA-256 digests, signer key ID and identity, builder identity, and applicable policy ID. It reloads both stores before returning a successful diagnostic and invalidates trust if file or directory identity, content, or generation changes. The local generations do not provide adversarial rollback protection.
+
+P013D-2A does not implement an independently reviewed enrollment chain. Root ownership proves only that local administration installed a file; it does not prove the real-world identity of the named CI system. Thus even a matching production key and policy report `Independent trust establishment: UNVERIFIED` and `BUILD_ORIGIN_UNVERIFIED`. P013D-2B must establish enrollment, revocation, rotation, transaction recovery, and rollback protection before production may claim build origin.
+
+Host tests use deterministic synthetic Ed25519 keys and isolated temporary root/policy stores. No CLI option, environment variable, or production configuration selects those fixtures. Their successful cryptographic and policy verification demonstrates implementation behavior only.
+
+Production trust requires an independently authenticated root, a reviewed mapping from root to signer identities and builder IDs, managed key enrollment/revocation/rotation, rollback-resistant lifecycle, and reviewed build-type/source/parameter policy. Lifecycle work is deferred to P013D-2B. No GitHub Actions, Sigstore, Fulcio, external PKI authenticity, or SLSA level is asserted. See [storage](builder-trust-storage.md), [policy schema](builder-policy-schema.md), and [P013D-2A gates](../validation/P013D2A_BUILDER_TRUST_GATES.md).

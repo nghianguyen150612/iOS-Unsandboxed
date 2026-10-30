@@ -92,7 +92,7 @@ def main():
         for expected in (
             "Attestation syntax: VALID",
             "Attestation signature: UNKNOWN_SIGNER",
-            "Signer identity verified: UNKNOWN",
+            "Signer identity: UNKNOWN (UNAVAILABLE)",
             "Attestation subject: MATCHED_DESCRIPTOR_SHA256",
             "Builder identity claimed: https://example.invalid/builders/unconfigured",
             "Builder identity trust: UNKNOWN_AUTHORITY",

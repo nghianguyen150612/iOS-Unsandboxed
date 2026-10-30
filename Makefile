@@ -17,7 +17,7 @@ LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test builder-trust-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -31,6 +31,7 @@ help:
 	  'make launch-binding-test Run identity and scope fixtures' \
 	  'make authenticated-binding-test Run descriptor-bound authenticated preview fixtures' \
 	  'make build-attestation-test Run DSSE/SLSA verification and P013C binding fixtures' \
+	  'make builder-trust-test Run read-only builder root, policy, provider, and CLI fixtures' \
 	  'make trust-provider-test Run signed-manifest and trust-anchor fixtures' \
 	  'make origin-policy-test Run fail-closed origin-policy fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
@@ -68,6 +69,7 @@ test: host-build
 	$(MAKE) launch-binding-test
 	$(MAKE) authenticated-binding-test
 	$(MAKE) build-attestation-test
+	$(MAKE) builder-trust-test
 	$(MAKE) trust-provider-test
 	$(MAKE) trust-format-test
 	$(MAKE) trust-manager-test
@@ -201,6 +203,11 @@ build-attestation-test:
 	cargo test --locked --workspace authenticated_binding::tests::attestation
 	cargo build --locked --workspace
 	python3 tests/attestation/cli-test.py target/debug/ios-unsandboxed
+
+builder-trust-test:
+	cargo build --locked --workspace
+	cargo test --locked --workspace builder_trust::tests::
+	python3 tests/builder-trust/cli-test.py target/debug/ios-unsandboxed
 
 trust-provider-test:
 	cargo test --locked --workspace provenance::tests::

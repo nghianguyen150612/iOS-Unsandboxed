@@ -5,9 +5,9 @@
 //! actual Ed25519 check against the canonical P013 manifest and trust store.
 
 use crate::build_attestation::{
-    self, AttestationError, BuildOriginStatus, BuilderVerificationProviderV1,
-    UnconfiguredBuilderProviderV1, VerificationResult,
+    self, AttestationError, BuildOriginStatus, BuilderVerificationProviderV1, VerificationResult,
 };
+use crate::builder_trust::LocalBuilderVerificationProviderV1;
 use crate::provenance::{
     self, GenerationMarkerStatus, SignatureCheck, TrustLoadError, TrustSnapshot,
 };
@@ -1069,14 +1069,14 @@ pub fn preview(manifest_path: &Path, artifact_path: &OsStr) -> CompositePreviewV
     )
 }
 
-/// Read-only P013D attestation diagnostic. The production builder provider is
-/// intentionally unconfigured until an independent root and policy exist.
+/// Read-only P013D attestation diagnostic. Local roots and policies can be
+/// inspected, but they cannot establish the independent enrollment chain.
 pub fn preview_attestation(attestation_path: &Path, artifact_path: &OsStr) -> CompositePreviewV2 {
     preview_attestation_with(
         attestation_path,
         artifact_path,
         &C17P012Binding,
-        &UnconfiguredBuilderProviderV1,
+        &LocalBuilderVerificationProviderV1::production(),
     )
 }
 
@@ -1165,6 +1165,9 @@ where
                 &artifact.identity.sha256,
                 provider,
             );
+            if result.trust_snapshot.is_some() && !provider.revalidate_trust_snapshot() {
+                result.invalidate_trust_snapshot();
+            }
             let p012 = binding.revalidate(&artifact.file, &summary);
             let artifact_state = revalidate_artifact(&artifact);
             let attestation_current = revalidate_attestation(&attestation);
@@ -2023,6 +2026,10 @@ mod tests {
             } else {
                 BuilderAuthorityV1::IdentityMismatch
             }
+        }
+
+        fn independent_trust_established(&self) -> bool {
+            true
         }
     }
 
