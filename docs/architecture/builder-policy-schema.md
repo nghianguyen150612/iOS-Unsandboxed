@@ -45,3 +45,7 @@ revisions by repository wildcard, and no local policy by itself proves the
 real-world identity of a CI system. The P013D-2B enrollment workflow must
 establish that trust anchor independently before production can report a
 verified build origin.
+
+## P013D-2B-2 policy planning input
+
+The read-only planner accepts only `version`, `signerIdentity`, `builderId`, `buildType`, `externalParameters`, `sourceUri`, and `allowedGitRevisions`. `policyId` and `state` are not accepted from input: the planner sets active state and derives the v1 SHA-256 policy ID. The complete `externalParameters` object must contain a full lowercase `revision` that also occurs in the explicit allowed revision set. Duplicate JSON fields, unknown top-level fields, missing values, wildcard IDs/URIs, malformed URIs, and revision prefixes reject. Input whitespace and object key order are allowed; output is serialized using the store's canonical compact sorted-key JSON. The plan is never persisted in this increment.

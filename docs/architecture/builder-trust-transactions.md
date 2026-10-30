@@ -4,6 +4,8 @@ The C17 ABI v1 uses a fixed 312-byte structure guarded by `_Static_assert`; its 
 
 The read-only `state.v1` marker (maximum 512 bytes) uses the ordered ASCII lines `ios-unsandboxed-builder-state`, `schema_version=1`, `root_generation`, `root_sha256`, `policy_generation`, and `policy_sha256`. Without a transaction, it must match both loaded stores. With a journal, the classifier compares it to the actual old or new pair. An absent marker is reported as legacy unanchored history outside a transaction. Neither marker nor journal is independently rollback-resistant.
 
+P013D-2B-2 constructs a compatible `transaction.v1` byte image and next `state.v1` marker only in memory. A changed roots-only or policies-only plan preserves the other existing generation/digest; first materialization starts that store at generation 1. First enrollment from two absent stores produces a combined pair. Rust validates every proposed image with the existing parsers; `mutation-vectors.json` is also accepted and byte-for-byte re-encoded by the C17 codec. Planning refuses any observed journal or orphan stage. It does not create stages, journal, marker, or stores and does not perform crash recovery.
+
 ## Read-only crash-state classification
 
 The reader opens the two canonical stores, both fixed stage names, the journal, and the marker relative to the held directory descriptor. Every file receives the same root ownership, mode `0600`, regular-file, single-link, bounded-read, before/after identity, and reopen checks as the canonical stores. The directory chain is revalidated before the classification is returned. Unknown entries, symlinks, hard links, unsafe modes, malformed data, and replacement races fail closed.

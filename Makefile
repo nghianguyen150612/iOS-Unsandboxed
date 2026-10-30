@@ -17,7 +17,7 @@ LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
 POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_builder_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test builder-trust-test builder-transaction-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test builder-trust-test builder-transaction-test builder-mutation-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -32,6 +32,7 @@ help:
 	  'make authenticated-binding-test Run descriptor-bound authenticated preview fixtures' \
 	  'make build-attestation-test Run DSSE/SLSA verification and P013C binding fixtures' \
 	  'make builder-trust-test Run read-only builder root, policy, provider, and CLI fixtures' \
+	  'make builder-mutation-test Run deterministic read-only builder mutation plans' \
 	  'make trust-provider-test Run signed-manifest and trust-anchor fixtures' \
 	  'make origin-policy-test Run fail-closed origin-policy fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
@@ -71,6 +72,7 @@ test: host-build
 	$(MAKE) build-attestation-test
 	$(MAKE) builder-trust-test
 	$(MAKE) builder-transaction-test
+	$(MAKE) builder-mutation-test
 	$(MAKE) trust-provider-test
 	$(MAKE) trust-format-test
 	$(MAKE) trust-manager-test
@@ -216,6 +218,14 @@ builder-transaction-test:
 	python3 tests/builder-trust/transaction-fixtures.py build/host/builder-transaction-test
 	cargo test --locked --workspace builder_transaction::tests::
 	@if $(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie $(NATIVE_INCLUDES) tests/builder-trust/transaction-test.c native/src/iu_builder_transaction.c -o build/host/builder-transaction-sanitized >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/builder-trust/transaction-fixtures.py build/host/builder-transaction-sanitized; else echo 'Builder transaction sanitizers unavailable'; fi
+
+builder-mutation-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/builder-trust/transaction-test.c native/src/iu_builder_transaction.c -o build/host/builder-transaction-test
+	cargo build --locked --workspace
+	cargo test --locked --workspace builder_mutation::tests::
+	cargo test --locked --workspace tests::reserved_commands_accept_the_documented_shapes
+	python3 tests/builder-trust/mutation-fixtures.py build/host/builder-transaction-test target/debug/ios-unsandboxed
 
 trust-provider-test:
 	cargo test --locked --workspace provenance::tests::

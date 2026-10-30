@@ -21,8 +21,8 @@ pub const POLICY_STORE_SCHEMA_V1: u32 = 1;
 pub const MAX_STORE_BYTES: usize = 64 * 1024;
 pub const MAX_SIGNING_KEYS: usize = 32;
 pub const MAX_POLICIES: usize = 64;
-const MAX_IDENTITY_BYTES: usize = 256;
-const MAX_URI_BYTES: usize = 2048;
+pub(crate) const MAX_IDENTITY_BYTES: usize = 256;
+pub(crate) const MAX_URI_BYTES: usize = 2048;
 const ROOT_FILE: &str = "roots.v1";
 const POLICY_FILE: &str = "policies.v1";
 
@@ -55,7 +55,7 @@ impl StoreError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileIdentity {
+pub(crate) struct FileIdentity {
     dev: u64,
     ino: u64,
     mode: u32,
@@ -88,7 +88,7 @@ impl FileIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileSnapshot {
+pub(crate) struct FileSnapshot {
     identity: FileIdentity,
     digest: [u8; 32],
     generation: u64,
@@ -142,15 +142,15 @@ pub struct PolicyRecordV1 {
 }
 
 #[derive(Debug, Clone)]
-struct RootStoreV1 {
-    generation: u64,
-    keys: BTreeMap<String, RootRecordV1>,
+pub(crate) struct RootStoreV1 {
+    pub generation: u64,
+    pub keys: BTreeMap<String, RootRecordV1>,
 }
 
 #[derive(Debug, Clone)]
-struct PolicyStoreV1 {
-    generation: u64,
-    policies: BTreeMap<String, PolicyRecordV1>,
+pub(crate) struct PolicyStoreV1 {
+    pub generation: u64,
+    pub policies: BTreeMap<String, PolicyRecordV1>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +178,29 @@ struct TrustLocation {
     components: Vec<std::ffi::CString>,
     uid: u32,
     gid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MutationFingerprintV1 {
+    pub(crate) directory_chain: Option<Vec<FileIdentity>>,
+    pub(crate) roots: Option<FileSnapshot>,
+    pub(crate) policies: Option<FileSnapshot>,
+    pub(crate) marker: Option<FileSnapshot>,
+    pub(crate) transaction_status: crate::builder_transaction::TransactionState,
+    pub(crate) marker_status: crate::builder_transaction::MarkerStatus,
+    pub(crate) root_error: Option<StoreErrorKind>,
+    pub(crate) policy_error: Option<StoreErrorKind>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BuilderMutationBaseV1 {
+    pub roots: Option<RootStoreV1>,
+    pub policies: Option<PolicyStoreV1>,
+    pub root_generation: Option<u64>,
+    pub root_digest: Option<[u8; 32]>,
+    pub policy_generation: Option<u64>,
+    pub policy_digest: Option<[u8; 32]>,
+    pub(crate) fingerprint: MutationFingerprintV1,
 }
 
 impl TrustLocation {
@@ -296,6 +319,92 @@ impl LocalBuilderVerificationProviderV1 {
         Ok(())
     }
 
+    pub(crate) fn mutation_base(&self) -> Result<BuilderMutationBaseV1, StoreError> {
+        use crate::builder_transaction::{MarkerStatus, TransactionState};
+        if self.state.transaction_status != TransactionState::NoTransaction {
+            return Err(StoreError::new(
+                StoreErrorKind::Pending,
+                format!(
+                    "builder transaction state is {}",
+                    self.state.transaction_status.label()
+                ),
+            ));
+        }
+        let roots = optional_valid_store(&self.state.roots)?;
+        let policies = optional_valid_store(&self.state.policies)?;
+        let trust_directory_missing = self.state.directory_chain.is_none()
+            && self
+                .state
+                .roots
+                .error
+                .as_ref()
+                .is_some_and(|e| e.kind == StoreErrorKind::Missing)
+            && self
+                .state
+                .policies
+                .error
+                .as_ref()
+                .is_some_and(|e| e.kind == StoreErrorKind::Missing);
+        if !matches!(
+            self.state.marker_status,
+            MarkerStatus::Matching | MarkerStatus::LegacyUnanchored
+        ) && !trust_directory_missing
+        {
+            return Err(StoreError::new(
+                if self.state.marker_status == MarkerStatus::Inconsistent {
+                    StoreErrorKind::MarkerInconsistent
+                } else {
+                    StoreErrorKind::Unsafe
+                },
+                format!(
+                    "builder generation marker state is {}",
+                    self.state.marker_status.label()
+                ),
+            ));
+        }
+        let root_snapshot = self.state.roots.snapshot.as_ref();
+        let policy_snapshot = self.state.policies.snapshot.as_ref();
+        if roots.is_some() != root_snapshot.is_some()
+            || policies.is_some() != policy_snapshot.is_some()
+        {
+            return Err(StoreError::new(
+                StoreErrorKind::Malformed,
+                "builder store parser and snapshot disagree",
+            ));
+        }
+        Ok(BuilderMutationBaseV1 {
+            roots,
+            policies,
+            root_generation: root_snapshot.map(|snapshot| snapshot.generation),
+            root_digest: root_snapshot.map(|snapshot| snapshot.digest),
+            policy_generation: policy_snapshot.map(|snapshot| snapshot.generation),
+            policy_digest: policy_snapshot.map(|snapshot| snapshot.digest),
+            fingerprint: mutation_fingerprint(&self.state),
+        })
+    }
+
+    pub(crate) fn revalidate_mutation_base(
+        &self,
+        expected: &BuilderMutationBaseV1,
+    ) -> Result<(), StoreError> {
+        let location = self.location.as_ref().ok_or_else(|| {
+            StoreError::new(
+                StoreErrorKind::Unavailable,
+                "trust root descriptor unavailable",
+            )
+        })?;
+        let current = location.load();
+        if current.transaction_status != crate::builder_transaction::TransactionState::NoTransaction
+            || mutation_fingerprint(&current) != expected.fingerprint
+        {
+            return Err(StoreError::new(
+                StoreErrorKind::Stale,
+                "builder trust configuration changed during mutation planning",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn status_report(&self) -> String {
         let root = self
             .state
@@ -406,7 +515,12 @@ impl LocalBuilderVerificationProviderV1 {
     }
 
     #[cfg(test)]
-    fn from_test_root(root: File, components: &[&std::ffi::CStr], uid: u32, gid: u32) -> Self {
+    pub(crate) fn from_test_root(
+        root: File,
+        components: &[&std::ffi::CStr],
+        uid: u32,
+        gid: u32,
+    ) -> Self {
         let location = TrustLocation {
             root,
             components: components
@@ -563,6 +677,37 @@ fn store_status<T>(store: &LoadedStore<T>) -> String {
         format!("{:?}: {}", error.kind, escape(&error.message))
     } else {
         "UNAVAILABLE".to_owned()
+    }
+}
+
+fn optional_valid_store<T: Clone>(store: &LoadedStore<T>) -> Result<Option<T>, StoreError> {
+    if let Some(parsed) = &store.parsed {
+        return Ok(Some(parsed.clone()));
+    }
+    match &store.error {
+        Some(error) if error.kind == StoreErrorKind::Missing => Ok(None),
+        Some(error) => Err(error.clone()),
+        None => Err(StoreError::new(
+            StoreErrorKind::Unavailable,
+            "builder store has no parsed value or typed error",
+        )),
+    }
+}
+
+fn mutation_fingerprint(state: &LocalTrustState) -> MutationFingerprintV1 {
+    MutationFingerprintV1 {
+        directory_chain: state.directory_chain.clone(),
+        roots: state.roots.snapshot.clone(),
+        policies: state.policies.snapshot.clone(),
+        marker: state.marker.clone(),
+        transaction_status: state.transaction_status,
+        marker_status: state.marker_status,
+        root_error: state.roots.error.as_ref().map(|error| error.kind.clone()),
+        policy_error: state
+            .policies
+            .error
+            .as_ref()
+            .map(|error| error.kind.clone()),
     }
 }
 
@@ -1214,7 +1359,7 @@ fn revalidate_directory_chain(
     true
 }
 
-fn parse_root_store(bytes: &[u8]) -> Result<(RootStoreV1, u64), StoreError> {
+pub(crate) fn parse_root_store(bytes: &[u8]) -> Result<(RootStoreV1, u64), StoreError> {
     let value = parse_canonical(bytes)?;
     let object = strict_object(
         &value,
@@ -1303,7 +1448,7 @@ fn parse_root_store(bytes: &[u8]) -> Result<(RootStoreV1, u64), StoreError> {
     Ok((RootStoreV1 { generation, keys }, generation))
 }
 
-fn parse_policy_store(bytes: &[u8]) -> Result<(PolicyStoreV1, u64), StoreError> {
+pub(crate) fn parse_policy_store(bytes: &[u8]) -> Result<(PolicyStoreV1, u64), StoreError> {
     let value = parse_canonical(bytes)?;
     let object = strict_object(&value, &["schemaVersion", "generation", "policies"], &[])?;
     ensure_version(object, "schemaVersion", POLICY_STORE_SCHEMA_V1.into())?;
@@ -1422,7 +1567,7 @@ fn parse_policy_store(bytes: &[u8]) -> Result<(PolicyStoreV1, u64), StoreError> 
     ))
 }
 
-fn parse_canonical(bytes: &[u8]) -> Result<Value, StoreError> {
+pub(crate) fn parse_canonical(bytes: &[u8]) -> Result<Value, StoreError> {
     if bytes.len() > MAX_STORE_BYTES {
         return Err(StoreError::new(
             StoreErrorKind::Unsafe,
@@ -1439,7 +1584,7 @@ fn parse_canonical(bytes: &[u8]) -> Result<Value, StoreError> {
     Ok(value)
 }
 
-fn derive_policy_id(policy: &PolicyRecordV1) -> Result<String, StoreError> {
+pub(crate) fn derive_policy_id(policy: &PolicyRecordV1) -> Result<String, StoreError> {
     let mut value = Map::new();
     value.insert(
         "allowedGitRevisions".into(),
@@ -1541,7 +1686,7 @@ fn string(object: &Map<String, Value>, field: &str, maximum: usize) -> Result<St
         .map(str::to_owned)
         .ok_or_else(|| malformed(format!("invalid {field}")))
 }
-fn checked_identity(value: String) -> Result<String, StoreError> {
+pub(crate) fn checked_identity(value: String) -> Result<String, StoreError> {
     if value.len() > MAX_IDENTITY_BYTES
         || value.trim() != value
         || has_control(&value)
@@ -1552,7 +1697,7 @@ fn checked_identity(value: String) -> Result<String, StoreError> {
         Ok(value)
     }
 }
-fn checked_uri(value: String) -> Result<String, StoreError> {
+pub(crate) fn checked_uri(value: String) -> Result<String, StoreError> {
     if value.len() > MAX_URI_BYTES
         || !(value.starts_with("https://") || value.starts_with("git+https://"))
         || value.contains('*')
@@ -1565,16 +1710,16 @@ fn checked_uri(value: String) -> Result<String, StoreError> {
 fn has_control(value: &str) -> bool {
     value.chars().any(char::is_control)
 }
-fn valid_revision(value: &str) -> bool {
+pub(crate) fn valid_revision(value: &str) -> bool {
     (value.len() == 40 || value.len() == 64) && lower_hex(value, value.len())
 }
-fn lower_hex(value: &str, length: usize) -> bool {
+pub(crate) fn lower_hex(value: &str, length: usize) -> bool {
     value.len() == length
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+pub(crate) fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
     if value.len() != N * 2 || !lower_hex(value, N * 2) {
         return None;
     }
@@ -1591,13 +1736,13 @@ fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
     }
     Some(out)
 }
-fn derive_key_id(key: &[u8; 32]) -> String {
+pub(crate) fn derive_key_id(key: &[u8; 32]) -> String {
     hex(&Sha256::digest(key)[..16])
 }
 fn malformed(message: impl Into<String>) -> StoreError {
     StoreError::new(StoreErrorKind::Malformed, message)
 }
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 fn escape(value: &str) -> String {

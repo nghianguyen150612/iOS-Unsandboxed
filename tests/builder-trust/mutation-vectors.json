@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "firstSignerPlan": {
+    "publicKeyHex": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
+    "signerIdentity": "local-ci-enrollment-1",
+    "operation": "combined",
+    "rootSha256": "c4a4c62d44f6558c8c70a64e22a6102c5d4474ad65ccfaf8b1663eccc5de37de",
+    "policySha256": "43afefeeb751c27a1a9fb57dc50c2880138cd9062195414e4e707148a840d8f0",
+    "transaction": "ios-unsandboxed-builder-transaction\nschema_version=1\noperation=combined\nold_root_generation=none\nnew_root_generation=1\nold_root_sha256=none\nnew_root_sha256=c4a4c62d44f6558c8c70a64e22a6102c5d4474ad65ccfaf8b1663eccc5de37de\nold_policy_generation=none\nnew_policy_generation=1\nold_policy_sha256=none\nnew_policy_sha256=43afefeeb751c27a1a9fb57dc50c2880138cd9062195414e4e707148a840d8f0\nstage_roots=roots.stage.v1\nstage_policies=policies.stage.v1\nphase=prepared\n"
+  }
+}
