@@ -203,6 +203,41 @@ pub(crate) struct BuilderMutationBaseV1 {
     pub(crate) fingerprint: MutationFingerprintV1,
 }
 
+impl BuilderMutationBaseV1 {
+    #[allow(dead_code)] // Used by the privileged static library, not the read-only CLI.
+    pub(crate) fn from_admin_bytes(
+        roots: Option<&[u8]>,
+        policies: Option<&[u8]>,
+    ) -> Result<Self, StoreError> {
+        let root_store = roots
+            .map(parse_root_store)
+            .transpose()?
+            .map(|(store, _)| store);
+        let policy_store = policies
+            .map(parse_policy_store)
+            .transpose()?
+            .map(|(store, _)| store);
+        Ok(Self {
+            root_generation: root_store.as_ref().map(|s| s.generation),
+            policy_generation: policy_store.as_ref().map(|s| s.generation),
+            root_digest: roots.map(|b| Sha256::digest(b).into()),
+            policy_digest: policies.map(|b| Sha256::digest(b).into()),
+            roots: root_store,
+            policies: policy_store,
+            fingerprint: MutationFingerprintV1 {
+                directory_chain: None,
+                roots: None,
+                policies: None,
+                marker: None,
+                transaction_status: crate::builder_transaction::TransactionState::NoTransaction,
+                marker_status: crate::builder_transaction::MarkerStatus::Matching,
+                root_error: None,
+                policy_error: None,
+            },
+        })
+    }
+}
+
 impl TrustLocation {
     fn load(&self) -> LocalTrustState {
         let Ok(root) = self.root.try_clone() else {
@@ -222,6 +257,9 @@ impl TrustLocation {
 
 impl LocalTrustState {
     fn snapshot(&self) -> Option<BuilderTrustSnapshotV1> {
+        if self.marker_status != crate::builder_transaction::MarkerStatus::Matching {
+            return None;
+        }
         let roots = self.roots.parsed.as_ref()?;
         let policies = self.policies.parsed.as_ref()?;
         let root = self.roots.snapshot.as_ref()?;
@@ -550,7 +588,8 @@ impl BuilderVerificationProviderV1 for LocalBuilderVerificationProviderV1 {
             crate::builder_transaction::MarkerStatus::Inconsistent => {
                 return Some(Error::BuilderMarkerInconsistent)
             }
-            crate::builder_transaction::MarkerStatus::Unavailable => {
+            crate::builder_transaction::MarkerStatus::Unavailable
+            | crate::builder_transaction::MarkerStatus::LegacyUnanchored => {
                 return Some(Error::BuilderGenerationMarkerUnavailable)
             }
             crate::builder_transaction::MarkerStatus::Unsafe => {
@@ -575,6 +614,9 @@ impl BuilderVerificationProviderV1 for LocalBuilderVerificationProviderV1 {
     }
 
     fn signer(&self, key_id: &str) -> Option<SignerV1> {
+        if self.diagnostic_error().is_some() {
+            return None;
+        }
         let record = self.state.roots.parsed.as_ref()?.keys.get(key_id)?;
         if record.state != "active" {
             return None;
@@ -600,6 +642,9 @@ impl BuilderVerificationProviderV1 for LocalBuilderVerificationProviderV1 {
         signer_identity: &str,
         builder_identity: &str,
     ) -> BuilderAuthorityV1 {
+        if self.diagnostic_error().is_some() {
+            return BuilderAuthorityV1::Untrusted;
+        }
         let Some(roots) = self.state.roots.parsed.as_ref() else {
             return BuilderAuthorityV1::Unknown;
         };
@@ -641,6 +686,9 @@ impl BuilderVerificationProviderV1 for LocalBuilderVerificationProviderV1 {
     }
 
     fn policy_identity(&self, signer_identity: &str, builder_identity: &str) -> Option<String> {
+        if self.diagnostic_error().is_some() {
+            return None;
+        }
         self.state
             .policies
             .parsed
@@ -821,7 +869,8 @@ fn load_state_from_root(
 
     let has_transaction_artifacts = entries.contains("transaction.v1")
         || entries.contains("roots.stage.v1")
-        || entries.contains("policies.stage.v1");
+        || entries.contains("policies.stage.v1")
+        || entries.contains("state.stage.v1");
     if has_transaction_artifacts {
         use crate::builder_transaction::{classify, Observation, TransactionState};
         let journal_store = entries.contains("transaction.v1").then(|| {
@@ -843,7 +892,7 @@ fn load_state_from_root(
                 parse_policy_store,
             )
         });
-        let state = classify(
+        let mut state = classify(
             journal_store
                 .as_ref()
                 .map(observation_journal)
@@ -863,6 +912,36 @@ fn load_state_from_root(
                 .map(observation_marker)
                 .unwrap_or(Observation::Absent),
         );
+        if entries.contains("state.stage.v1") {
+            let staged = read_store(&directory, "state.stage.v1", uid, gid, |bytes| {
+                crate::builder_transaction::parse_marker(bytes)
+                    .map(|m| (m, 0))
+                    .map_err(|e| StoreError::new(StoreErrorKind::MarkerInconsistent, e))
+            });
+            let valid = staged
+                .parsed
+                .as_ref()
+                .zip(journal_store.as_ref().and_then(|j| j.parsed.as_ref()))
+                .is_some_and(|(m, j)| m.roots == j.new_roots && m.policies == j.new_policies);
+            if !valid
+                || !matches!(
+                    state,
+                    TransactionState::BothStoresReplaced
+                        | TransactionState::CommittedPairMarkerPending
+                        | TransactionState::CompleteCommit
+                )
+            {
+                state = if staged
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.kind == StoreErrorKind::Unsafe)
+                {
+                    TransactionState::UnsafeTransactionArtifact
+                } else {
+                    TransactionState::ConflictingState
+                };
+            }
+        }
         if !revalidate_directory_chain(&root_for_revalidation, components, &chain) {
             return include_store_diagnostics(
                 transaction_unavailable_state(
@@ -1191,6 +1270,7 @@ fn check_directory_entries(directory: &File) -> Result<BTreeSet<String>, StoreEr
             && name != b"transaction.v1"
             && name != b"roots.stage.v1"
             && name != b"policies.stage.v1"
+            && name != b"state.stage.v1"
         {
             unexpected = true;
             break;
@@ -1232,7 +1312,7 @@ fn read_store_with_hook<T, F: FnOnce()>(
 ) -> LoadedStore<T> {
     let maximum = match filename {
         "transaction.v1" => crate::builder_transaction::MAX_JOURNAL_BYTES,
-        "state.v1" => crate::builder_transaction::MAX_MARKER_BYTES,
+        "state.v1" | "state.stage.v1" => crate::builder_transaction::MAX_MARKER_BYTES,
         _ => MAX_STORE_BYTES,
     };
     let name = std::ffi::CString::new(filename).expect("fixed filename");
@@ -1403,8 +1483,7 @@ pub(crate) fn parse_root_store(bytes: &[u8]) -> Result<(RootStoreV1, u64), Store
         }
         let public_key =
             decode_hex::<32>(&key_text).ok_or_else(|| malformed("invalid Ed25519 public key"))?;
-        ed25519_dalek::VerifyingKey::from_bytes(&public_key)
-            .map_err(|_| malformed("publicKey is not a valid Ed25519 key"))?;
+        validate_ed25519_key(&public_key)?;
         if derive_key_id(&public_key) != key_id {
             return Err(malformed("keyId does not match publicKey"));
         }
@@ -1736,6 +1815,26 @@ pub(crate) fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
     }
     Some(out)
 }
+pub(crate) fn validate_ed25519_key(key: &[u8; 32]) -> Result<(), StoreError> {
+    // Compressed Edwards Y must be the canonical representative below 2^255-19.
+    // dalek accepts some noncanonical encodings for verification compatibility;
+    // enrollment and canonical stores deliberately use the stricter profile.
+    let mut y = *key;
+    y[31] &= 0x7f;
+    let mut prime = [0xff; 32];
+    prime[0] = 0xed;
+    prime[31] = 0x7f;
+    if y.iter().rev().cmp(prime.iter().rev()) != std::cmp::Ordering::Less {
+        return Err(malformed("publicKey has noncanonical Edwards Y"));
+    }
+    let point = ed25519_dalek::VerifyingKey::from_bytes(key)
+        .map_err(|_| malformed("publicKey is not a valid Ed25519 point"))?;
+    if point.is_weak() {
+        return Err(malformed("weak small-order Ed25519 public key"));
+    }
+    Ok(())
+}
+
 pub(crate) fn derive_key_id(key: &[u8; 32]) -> String {
     hex(&Sha256::digest(key)[..16])
 }
@@ -1815,6 +1914,31 @@ mod tests {
     fn write_store(path: &std::path::Path, name: &str, bytes: &[u8]) {
         std::fs::write(path.join(name), bytes).unwrap();
         std::fs::set_permissions(path.join(name), std::fs::Permissions::from_mode(0o600)).unwrap();
+        if [ROOT_FILE, POLICY_FILE].contains(&name)
+            && !path.join("transaction.v1").exists()
+            && !path.join("roots.stage.v1").exists()
+            && !path.join("policies.stage.v1").exists()
+        {
+            if let (Ok(r), Ok(p)) = (
+                std::fs::read(path.join(ROOT_FILE)),
+                std::fs::read(path.join(POLICY_FILE)),
+            ) {
+                if let (Ok((_, rg)), Ok((_, pg))) = (parse_root_store(&r), parse_policy_store(&p)) {
+                    let marker = crate::builder_mutation::marker_bytes(
+                        rg,
+                        &hex(&Sha256::digest(r)),
+                        pg,
+                        &hex(&Sha256::digest(p)),
+                    );
+                    std::fs::write(path.join("state.v1"), marker).unwrap();
+                    std::fs::set_permissions(
+                        path.join("state.v1"),
+                        std::fs::Permissions::from_mode(0o600),
+                    )
+                    .unwrap();
+                }
+            }
+        }
     }
 
     fn root_json(key: &[u8; 32], identity: &str, state: &str) -> Vec<u8> {
@@ -2089,7 +2213,7 @@ mod tests {
             &root_json(&public, "signer-a", "active"),
         );
         let provider = tree.provider();
-        assert!(provider.signer(&derive_key_id(&public)).is_some());
+        assert!(provider.signer(&derive_key_id(&public)).is_none());
         assert!(matches!(
             provider.builder_authority("signer-a", "builder-a"),
             BuilderAuthorityV1::Untrusted
@@ -2397,8 +2521,10 @@ mod tests {
         .unwrap();
         write_store(&directory, ROOT_FILE, &roots);
         write_store(&directory, POLICY_FILE, &policies);
+        std::fs::remove_file(directory.join("state.v1")).unwrap();
         let legacy = tree.provider();
-        assert!(legacy.snapshot().is_some());
+        assert!(legacy.snapshot().is_none());
+        assert!(legacy.signer(&derive_key_id(&key)).is_none());
         assert!(legacy.status_report().contains("LEGACY_UNANCHORED"));
         let marker = format!("ios-unsandboxed-builder-state\nschema_version=1\nroot_generation=3\nroot_sha256={}\npolicy_generation=1\npolicy_sha256={}\n", hex(&Sha256::digest(&roots)), hex(&Sha256::digest(&policies)));
         write_store(&directory, "state.v1", marker.as_bytes());
@@ -2518,7 +2644,7 @@ mod tests {
             .contains("Transaction state: PREPARED_OLD_PAIR"));
         assert_eq!(
             prepared.diagnostic_error(),
-            Some(crate::build_attestation::AttestationError::BuilderTransactionPending)
+            Some(crate::build_attestation::AttestationError::BuilderGenerationMarkerUnavailable)
         );
         assert!(prepared.signer(&derive_key_id(&key)).is_none());
         assert_eq!(
@@ -2555,6 +2681,26 @@ mod tests {
             hex(&Sha256::digest(&roots)),
             hex(&Sha256::digest(&policies)),
         );
+        write_store(&directory, "state.stage.v1", marker.as_bytes());
+        let staged_marker = tree.provider();
+        assert!(staged_marker
+            .status_report()
+            .contains("COMMITTED_PAIR_MARKER_PENDING"));
+        assert!(staged_marker.signer(&derive_key_id(&key)).is_none());
+        write_store(&directory, "state.stage.v1", b"truncated");
+        assert!(tree
+            .provider()
+            .status_report()
+            .contains("CONFLICTING_STATE"));
+        std::fs::remove_file(directory.join("state.stage.v1")).unwrap();
+        std::os::unix::fs::symlink(directory.join("roots.v1"), directory.join("state.stage.v1"))
+            .unwrap();
+        assert!(tree
+            .provider()
+            .status_report()
+            .contains("UNSAFE_TRANSACTION_ARTIFACT"));
+        assert!(tree.provider().signer(&derive_key_id(&key)).is_none());
+        std::fs::remove_file(directory.join("state.stage.v1")).unwrap();
         write_store(&directory, "state.v1", marker.as_bytes());
         let completed = tree.provider();
         assert!(completed

@@ -28,4 +28,13 @@ The displayed canonical store documents, journal, marker, old/new generations, d
 
 ## Privileged boundary
 
-A future privileged writer must load and validate its own current descriptor-bound state, reconstruct the requested operation from explicit arguments, independently rerun all limits and policy checks, and compare the current snapshot immediately before persistence. It must not treat CLI-produced canonical bytes or their hashes as authority. Enrollment authentication, persistent mutation, journaling writes, crash recovery, and rollback strategy are outside this increment. Local store ownership does not independently authenticate CI identity; production trust establishment stays UNVERIFIED and build origin stays `BUILD_ORIGIN_UNVERIFIED`.
+The P013D-2B-3 privileged writer must load and validate its own current descriptor-bound state, reconstruct the requested operation from explicit arguments, independently rerun all limits and policy checks, and compare the current snapshot immediately before persistence. It must not treat CLI-produced canonical bytes or their hashes as authority. Persistent mutation, journal writes and crash recovery are implemented by the separate P013D-2B-3 manager. Independent enrollment authentication and adversarial rollback protection remain outside local mutation planning. Local store ownership does not independently authenticate CI identity; production trust establishment stays UNVERIFIED and build origin stays `BUILD_ORIGIN_UNVERIFIED`.
+
+## Privileged reconstruction in P013D-2B-3
+
+The rootful helper links these schemas and mutation functions in-process as a
+Rust static library. It reconstructs each request from explicit arguments and
+a descriptor-validated current state. CLI previews remain read-only and are
+never approval tokens. See [privileged persistence](builder-trust-persistence.md).
+Canonical Ed25519 checks also reject noncanonical Edwards-Y encodings and weak
+points in both enrollment and store parsing.

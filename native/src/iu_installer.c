@@ -5,6 +5,7 @@
 #include "iu_policy_store.h"
 #include "iu_policy_manager.h"
 #include "iu_trust_manager.h"
+#include "iu_builder_trust_manager.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1133,10 +1134,17 @@ static int check_no_trust_transaction(struct context *ctx)
     }
     return 0;
 }
+static int check_no_builder_transaction(struct context *ctx)
+{
+    if(iu_builder_admin_settled_v1(ctx->datafd,ctx->uid,ctx->gid))
+        return bad("builder transaction or unsafe/inconsistent builder trust state; package/publisher mutation refused");
+    return 0;
+}
 static int check_no_transaction(struct context *ctx)
 {
     if(check_no_package_transaction(ctx)!=0)return 3;
-    return check_no_trust_transaction(ctx);
+    if(check_no_trust_transaction(ctx)!=0)return 3;
+    return check_no_builder_transaction(ctx);
 }
 static int check_destination_conflicts(struct context *ctx)
 {
@@ -1399,6 +1407,7 @@ static int cmd_uninstall(struct context *ctx)
     if(existing!=0)return bad("uninstall requires every project-owned file and disabled state to verify");
     {int active=active_plist_present(ctx),metadata=service_lifecycle_metadata_present(ctx);if(active<0||metadata<0)return bad("service lifecycle ownership state cannot be inspected safely");if(active||metadata)return bad("stop and unregister the project service before uninstall");}
     {struct iu_policy_store ps;struct stat trust_meta;iu_policy_store_load(ctx->datafd,ctx->uid,ctx->gid,&ps); if(ps.state!=IU_STORE_MISSING)printf("Execution policy (%s) will be preserved for administrator review.\n",iu_policy_store_state_name(ps.state));if(fstatat(ctx->datafd,"trusted-publishers",&trust_meta,AT_SYMLINK_NOFOLLOW)==0)puts("Trust metadata is present and will be preserved for administrator review.");else if(errno!=ENOENT)return bad("trust metadata path cannot be inspected safely; uninstall refused");}
+    {struct stat st;if(fstatat(ctx->datafd,"builder-trust",&st,AT_SYMLINK_NOFOLLOW)==0)puts("Builder-trust signer/policy history will be preserved for administrator review.");}
     if(create_transaction_backup(ctx,&current,recovery)!=0)return bad("could not preserve a verified uninstall recovery generation");
     memset(&transaction,0,sizeof(transaction));strcpy(transaction.action,"uninstall");strcpy(transaction.recovery_generation,recovery);strcpy(transaction.target_generation,"none");strcpy(transaction.staging_generation,"none");strcpy(transaction.package_generation,current.package_generation);strcpy(transaction.phase,"prepared");
     if(write_transaction(ctx,&transaction)!=0)return bad("could not persist uninstall journal");
@@ -1412,20 +1421,25 @@ static int cmd_uninstall(struct context *ctx)
     if(clear_transaction(ctx)!=0)return bad("uninstall files were removed but the journal remains; run recover --apply");
     if(clean_all_backups(ctx)!=0)return bad("installation removed; one or more backup generations were unsafe and were preserved");
     if(clean_all_staging(ctx)!=0)return bad("installation removed; one or more staging entries were unsafe and were preserved");
+    /* Keep the verified empty bookkeeping directories whenever administrator
+     * metadata remains, so read-only inspection can open the same safe data root. */
+    {int only=data_has_only_staging_and_backups(ctx->datafd);
+     if(only<0)return bad("uninstall cannot inspect remaining project metadata");
+     if(!only){if(fsync_dir(ctx->datafd)!=0)return bad("uninstall metadata preservation sync failed");puts("Uninstall complete; administrator metadata and empty installer bookkeeping preserved.");return 0;}}
     if(unlinkat(ctx->datafd,"staging",AT_REMOVEDIR)!=0||unlinkat(ctx->datafd,"backups",AT_REMOVEDIR)!=0||unlinkat(ctx->varlibfd,"ios-unsandboxed",AT_REMOVEDIR)!=0){
         printf("Uninstall complete; empty project directories remain because they contain unrecognized or in-use files.\n");return 0;}
     printf("Uninstall complete: verified project-owned files, state, backups, and staging removed.\n");
     return 0;
 }
 
-static const char *trust_second, *trust_publisher;
+static const char *trust_second, *trust_publisher, *builder_identity, *builder_new_identity;
 static int parse_arguments(int argc,char **argv,const char **command,const char **service_action,const char **package_path,const char **test_root,const char **policy_path,int *apply,int *confirmed,int *acknowledge)
 {
     *command=NULL;*service_action=NULL;*package_path=NULL;*test_root=NULL;*policy_path=NULL;*apply=0;*confirmed=0;*acknowledge=0;
     if(argc<2)return -1;
     *command=argv[1];
     int first=2;
-    if(strcmp(*command,"service")==0||strcmp(*command,"policy")==0||strcmp(*command,"trust")==0){if(argc<3)return -1;*service_action=argv[2];first=3;}
+    if(strcmp(*command,"service")==0||strcmp(*command,"policy")==0||strcmp(*command,"trust")==0||strcmp(*command,"builder-trust")==0){if(argc<3)return -1;*service_action=argv[2];first=3;}
     for(int i=first;i<argc;++i){
         if(strcmp(argv[i],"--apply")==0){if(*apply)return -1;*apply=1;continue;}
         if(strcmp(argv[i],"--confirm")==0){if(*confirmed)return -1;*confirmed=1;continue;}
@@ -1436,6 +1450,12 @@ static int parse_arguments(int argc,char **argv,const char **command,const char 
         if(strcmp(argv[i],"--test-interrupt-at")==0&&i+1<argc){if(test_interrupt_at)return -1;test_interrupt_at=argv[++i];continue;}
 #endif
         if(strcmp(*command,"policy")==0 && argv[i][0]!='-' && !*policy_path){*policy_path=argv[i];continue;}
+        if(!strcmp(*command,"builder-trust")){
+            if(!strcmp(argv[i],"--identity")&&i+1<argc&&!builder_identity){builder_identity=argv[++i];continue;}
+            if(!strcmp(argv[i],"--new-identity")&&i+1<argc&&!builder_new_identity){builder_new_identity=argv[++i];continue;}
+            if(argv[i][0]!='-'&&!*policy_path){*policy_path=argv[i];continue;}
+            if(argv[i][0]!='-'&&!trust_second){trust_second=argv[i];continue;}
+        }
         if(!strcmp(*command,"trust")){
             if(!strcmp(argv[i],"--publisher")&&i+1<argc&&!trust_publisher){trust_publisher=argv[++i];continue;}
             if(argv[i][0]!='-'&&!*policy_path){*policy_path=argv[i];continue;}
@@ -1481,6 +1501,7 @@ static void print_help(void)
          "  rollback   Restore the last verified backup; changes require --apply\n"
          "  uninstall  Remove only verified project-owned files; requires --apply\n"
          "  recover    Restore the journal's verified pre-transaction generation\n\n"
+         "  builder-trust help|status|list|inspect|add-signer|revoke-signer|rotate-signer|add-policy|revoke-policy|recover\n"
          "  trust help|status|list|plan|add-key|revoke-key|rotate-key\n"
          "  policy help|status|plan|list|add-directory|remove-directory|reset|preview\n"
          "  service plan|status|register|start|stop|unregister|recover\n"
@@ -1494,20 +1515,40 @@ int main(int argc,char **argv)
 {
     const char *command,*service_action,*package_path,*test_root,*policy_path;int apply,confirmed,acknowledge,result=0,mutating=0,need_package=0,require_root=1;struct context ctx;
     if(parse_arguments(argc,argv,&command,&service_action,&package_path,&test_root,&policy_path,&apply,&confirmed,&acknowledge)!=0){print_help();return 2;}
-    if(strcmp(command,"service")!=0&&strcmp(command,"policy")!=0&&strcmp(command,"trust")!=0&&(confirmed||acknowledge)){fail("service confirmation flags are valid only for service commands");return 2;}
+    if(strcmp(command,"service")!=0&&strcmp(command,"policy")!=0&&strcmp(command,"trust")!=0&&strcmp(command,"builder-trust")!=0&&(confirmed||acknowledge)){fail("service confirmation flags are valid only for service commands");return 2;}
 #if defined(IU_INSTALLER_TESTING)
     if(test_interrupt_at!=NULL){
         if(test_root==NULL||!apply){fail("test interruption requires an explicit --test-root and --apply");return 2;}
-        if(strcmp(test_interrupt_at,"staging")&&strcmp(test_interrupt_at,"prepared")&&strcmp(test_interrupt_at,"trust-before-stage-write")&&strcmp(test_interrupt_at,"trust-after-stage-fsync")&&strcmp(test_interrupt_at,"trust-after-journal-fsync")&&strcmp(test_interrupt_at,"trust-before-rename")&&strcmp(test_interrupt_at,"trust-after-rename")&&strcmp(test_interrupt_at,"trust-after-dir-fsync")&&strcmp(test_interrupt_at,"trust-after-verify")&&strcmp(test_interrupt_at,"trust-after-generation-fsync")&&strcmp(test_interrupt_at,"trust-after-generation-anchor")&&strcmp(test_interrupt_at,"trust-during-cleanup")&&strcmp(test_interrupt_at,"policy-before-write")&&strcmp(test_interrupt_at,"policy-before-rename")&&strncmp(test_interrupt_at,"commit:",7)&&strncmp(test_interrupt_at,"rollback:",9)){fail("unknown test interruption phase");return 2;}
+        if(strncmp(test_interrupt_at,"builder-",8)&&strcmp(test_interrupt_at,"staging")&&strcmp(test_interrupt_at,"prepared")&&strcmp(test_interrupt_at,"trust-before-stage-write")&&strcmp(test_interrupt_at,"trust-after-stage-fsync")&&strcmp(test_interrupt_at,"trust-after-journal-fsync")&&strcmp(test_interrupt_at,"trust-before-rename")&&strcmp(test_interrupt_at,"trust-after-rename")&&strcmp(test_interrupt_at,"trust-after-dir-fsync")&&strcmp(test_interrupt_at,"trust-after-verify")&&strcmp(test_interrupt_at,"trust-after-generation-fsync")&&strcmp(test_interrupt_at,"trust-after-generation-anchor")&&strcmp(test_interrupt_at,"trust-during-cleanup")&&strcmp(test_interrupt_at,"policy-before-write")&&strcmp(test_interrupt_at,"policy-before-rename")&&strncmp(test_interrupt_at,"commit:",7)&&strncmp(test_interrupt_at,"rollback:",9)){fail("unknown test interruption phase");return 2;}
     }
 #endif
     if(strcmp(command,"help")==0){if(argc!=2)return 2;print_help();return 0;}
     if(strcmp(command,"version")==0){if(argc!=2)return 2;puts("iOS-Unsandboxed 0.1.0\ninstaller manager format 1\npackage format 1\ninstall manifest schema 1\nstate schema 1 (execution_activation=disabled)");return 0;}
     if(!strcmp(command,"policy") && !strcmp(service_action,"help")){if(argc!=3)return 2;policy_help();return 0;}
     if(!strcmp(command,"trust")&&!strcmp(service_action,"help")){if(argc!=3)return 2;puts("trust status|list|plan|recover [--apply --confirm]|add-key FILE --publisher ID|revoke-key ID|rotate-key ID FILE --publisher ID [--apply --confirm]");return 0;}
+    if(!strcmp(command,"builder-trust")&&!strcmp(service_action,"help")){
+        if(argc!=3)return 2;
+        puts("builder-trust status|list|inspect SIGNER_ID|recover [--apply --confirm]\n"
+             "builder-trust add-signer PUBLIC_KEY_FILE --identity SIGNER_ID\n"
+             "builder-trust revoke-signer KEY_ID\n"
+             "builder-trust rotate-signer OLD_KEY_ID NEW_PUBLIC_KEY_FILE --new-identity SIGNER_ID\n"
+             "builder-trust add-policy POLICY_FILE|revoke-policy POLICY_ID\n"
+             "Mutations default to dry-run; persistence requires --apply --confirm.");return 0;
+    }
     if(strcmp(command,"plan")==0){if(!package_path||apply){fail("plan requires --package and is always read-only");return 2;}need_package=1;}
     else if(strcmp(command,"install")==0||strcmp(command,"upgrade")==0){if(!package_path){fail("install and upgrade require --package DIR");return 2;}need_package=1;mutating=apply;}
     else if(strcmp(command,"status")==0){if(package_path||apply)return 2;}
+    else if(!strcmp(command,"builder-trust")){
+        int add=!strcmp(service_action,"add-signer"),rot=!strcmp(service_action,"rotate-signer");
+        int rev=!strcmp(service_action,"revoke-signer"),ap=!strcmp(service_action,"add-policy"),rp=!strcmp(service_action,"revoke-policy");
+        int recovery=!strcmp(service_action,"recover"),inspect=!strcmp(service_action,"inspect");
+        int readonly=!strcmp(service_action,"status")||!strcmp(service_action,"list")||inspect;
+        if(package_path||acknowledge||(!readonly&&!recovery&&!add&&!rot&&!rev&&!ap&&!rp))return 2;
+        if((add||rot||rev||ap||rp||inspect)!=(policy_path!=NULL))return 2;
+        if(rot!=(trust_second!=NULL)||add!=(builder_identity!=NULL)||rot!=(builder_new_identity!=NULL))return 2;
+        if(readonly?(apply||confirmed):(apply!=confirmed))return 2;
+        mutating=apply&&confirmed;require_root=mutating;
+    }
     else if(!strcmp(command,"trust")){
         int add=!strcmp(service_action,"add-key"),rev=!strcmp(service_action,"revoke-key"),rot=!strcmp(service_action,"rotate-key"),recovery=!strcmp(service_action,"recover");
         if(package_path||acknowledge)return 2;
@@ -1533,11 +1574,25 @@ int main(int argc,char **argv)
     if(init_context(&ctx,test_root,require_root)!=0)return 2;
     if(strcmp(command,"plan")==0){struct manifest m;int installed=check_existing_install(&ctx,&m);if(installed<0)result=bad("current installation is modified, foreign, or unsupported");else result=cmd_plan(&ctx,installed==0?"upgrade":"install",package_path);}
     else if(strcmp(command,"status")==0)result=cmd_status(&ctx);
+    else if(!strcmp(command,"builder-trust")){
+        struct manifest manifest;
+        if(mutating&&(check_production_platform(&ctx)||check_production_permissions(&ctx)))result=3;
+        else if(mutating&&acquire_lock(&ctx)!=0)result=4;
+        else if(mutating&&(check_no_package_transaction(&ctx)||check_no_trust_transaction(&ctx)||check_existing_install(&ctx,&manifest)))result=3;
+        else result=iu_builder_trust_manager_run(ctx.datafd,ctx.uid,ctx.gid,service_action,policy_path,trust_second,
+            builder_identity?builder_identity:builder_new_identity,mutating,
+#if defined(IU_INSTALLER_TESTING)
+            test_interrupt_at
+#else
+            NULL
+#endif
+        );
+    }
     else if(!strcmp(command,"trust")){
         struct manifest manifest;int recovery=!strcmp(service_action,"recover");
         if(mutating&&(check_production_platform(&ctx)||check_production_permissions(&ctx)))result=3;
         else if(mutating&&acquire_lock(&ctx)!=0)result=4;
-        else if(mutating&&((recovery?check_no_package_transaction(&ctx):check_no_transaction(&ctx))||check_existing_install(&ctx,&manifest)))result=3;
+        else if(mutating&&((recovery?(check_no_package_transaction(&ctx)||check_no_builder_transaction(&ctx)):check_no_transaction(&ctx))||check_existing_install(&ctx,&manifest)))result=3;
         else result=iu_trust_manager_run(ctx.datafd,ctx.uid,ctx.gid,service_action,policy_path,trust_second,trust_publisher,mutating,
 #if defined(IU_INSTALLER_TESTING)
             test_interrupt_at
@@ -1563,6 +1618,6 @@ int main(int argc,char **argv)
         else result=cmd_install_or_upgrade(&ctx,command,package_path);
     }else if(strcmp(command,"rollback")==0){if(!mutating)result=cmd_maintenance_plan(&ctx,"rollback");else result=cmd_rollback(&ctx);}
     else if(strcmp(command,"uninstall")==0){if(!mutating)result=cmd_maintenance_plan(&ctx,"uninstall");else result=cmd_uninstall(&ctx);}
-    else if(strcmp(command,"recover")==0){if(!mutating){struct transaction t;int tr=load_transaction(&ctx,&t);if(tr==0){printf("Recovery plan: restore the verified pre-transaction snapshot for %s (phase %s).\n",t.action,t.phase);result=0;}else if(tr<0)result=bad("transaction journal is unsafe or corrupt; preserve it for review");else{puts("Recovery plan: no transaction journal is present; no changes.");result=0;}}else{struct transaction t;int tr;if(acquire_lock(&ctx)!=0)result=4;else if(check_no_trust_transaction(&ctx)!=0)result=3;else{int active=active_plist_present(&ctx),metadata=service_lifecycle_metadata_present(&ctx);if(active<0||metadata<0)result=bad("service lifecycle ownership state cannot be inspected safely");else if(active||metadata)result=bad("stop and unregister the project service before package recovery");else{tr=load_transaction(&ctx,&t);if(tr==0)result=recover_transaction(&ctx,&t);else if(tr<0)result=bad("transaction journal is unsafe or corrupt; preserve it for review");else if(clean_all_staging(&ctx)!=0)result=bad("orphan staging entries could not be safely cleaned");else if(remove_empty_uninstalled_data(&ctx)!=0)result=bad("orphan staging was cleaned, but remaining project data was preserved for review");else{puts("No transaction journal is present; orphan staging was safely cleaned.");result=0;}}}}}
+    else if(strcmp(command,"recover")==0){if(!mutating){struct transaction t;int tr=load_transaction(&ctx,&t);if(tr==0){printf("Recovery plan: restore the verified pre-transaction snapshot for %s (phase %s).\n",t.action,t.phase);result=0;}else if(tr<0)result=bad("transaction journal is unsafe or corrupt; preserve it for review");else{puts("Recovery plan: no transaction journal is present; no changes.");result=0;}}else{struct transaction t;int tr;if(acquire_lock(&ctx)!=0)result=4;else if(check_no_trust_transaction(&ctx)!=0||check_no_builder_transaction(&ctx)!=0)result=3;else{int active=active_plist_present(&ctx),metadata=service_lifecycle_metadata_present(&ctx);if(active<0||metadata<0)result=bad("service lifecycle ownership state cannot be inspected safely");else if(active||metadata)result=bad("stop and unregister the project service before package recovery");else{tr=load_transaction(&ctx,&t);if(tr==0)result=recover_transaction(&ctx,&t);else if(tr<0)result=bad("transaction journal is unsafe or corrupt; preserve it for review");else if(clean_all_staging(&ctx)!=0)result=bad("orphan staging entries could not be safely cleaned");else if(remove_empty_uninstalled_data(&ctx)!=0)result=bad("orphan staging was cleaned, but remaining project data was preserved for review");else{puts("No transaction journal is present; orphan staging was safely cleaned.");result=0;}}}}}
     close_context(&ctx);return result;
 }

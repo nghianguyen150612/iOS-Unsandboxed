@@ -18,3 +18,9 @@ libc = "0.2"
 [[bin]]
 name = "ios-unsandboxed"
 path = "src/main.rs"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+builder-admin-testing = []

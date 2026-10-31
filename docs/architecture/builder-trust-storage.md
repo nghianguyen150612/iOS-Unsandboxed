@@ -1,16 +1,15 @@
 # P013D-2A builder trust storage
 
 P013D-2A adds a read-only production reader for independently scoped builder
-signer roots and builder policies. It stores no private keys and creates no
-trust directory or file. The production path is
+signer roots and builder policies. The reader stores no private keys and creates no trust directory or file. P013D-2B-3 supplies a separate privileged writer. The production path is
 `/var/lib/ios-unsandboxed/builder-trust/`; iOS opens the same location through
 its `/private/var` backing path. Publisher trust remains in its separate
 P013B store and cannot supply builder keys.
 
 The directory is expected to be root-owned mode `0700`. Settled entries are
-`roots.v1`, `policies.v1`, and optionally `state.v1`. During an interrupted
+`roots.v1`, `policies.v1`, and `state.v1` for verification authority (unanchored legacy files are diagnostics only). During an interrupted
 update, the reader also recognizes only `transaction.v1`, `roots.stage.v1`, and
-`policies.stage.v1`. Every recognized entry must be a root-owned regular
+`policies.stage.v1`, and `state.stage.v1`. Every recognized entry must be a root-owned regular
 file, mode `0600`, with one hard link and a strict size limit. The reader
 walks from a held `/` descriptor with `openat`, `O_NOFOLLOW`, and
 `O_DIRECTORY`. It checks ownership, modes, link count, file identity and
@@ -61,3 +60,12 @@ this increment. Those lifecycle interfaces are deferred to P013D-2B-2.
 A matching `state.v1` binds both stores; a missing marker reports legacy
 unanchored history. Neither generations nor the marker resist an attacker who
 can replace all local trust history. See [transaction metadata](builder-trust-transactions.md).
+
+## P013D-2B-3 persistence and settled authority
+
+The privileged helper now writes v1 stores; the CLI remains read-only. The fixed
+`state.stage.v1` marker stage is also recognized and bounded. Every pending
+artifact withholds authority. A combined marker is required for provider
+authority; legacy unanchored files remain diagnostic/planning inputs only.
+See [write ordering](builder-trust-persistence.md) and
+[forward recovery](builder-trust-recovery.md).

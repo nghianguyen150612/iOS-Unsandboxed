@@ -10,7 +10,6 @@ use crate::builder_trust::{
     LocalBuilderVerificationProviderV1, PolicyRecordV1, PolicyStoreV1, RootRecordV1, RootStoreV1,
     MAX_POLICIES, MAX_SIGNING_KEYS, MAX_STORE_BYTES,
 };
-use ed25519_dalek::VerifyingKey;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -195,7 +194,7 @@ fn plan_with_provider(
     Ok(plan)
 }
 
-fn plan_from_base(
+pub(crate) fn plan_from_base(
     base: &BuilderMutationBaseV1,
     request: BuilderMutationRequestV1,
 ) -> Result<BuilderMutationPlanV1, MutationError> {
@@ -820,7 +819,7 @@ fn transaction_bytes(
     .into_bytes()
 }
 
-fn marker_bytes(
+pub(crate) fn marker_bytes(
     root_generation: u64,
     root_digest: &str,
     policy_generation: u64,
@@ -863,14 +862,7 @@ fn read_bounded_input(path: &Path, maximum: usize) -> Result<Vec<u8>, MutationEr
 }
 
 fn validate_public_key(key: &[u8; 32]) -> Result<(), MutationError> {
-    let verifying_key = VerifyingKey::from_bytes(key)
-        .map_err(|_| MutationError("public key is not a valid Ed25519 point".into()))?;
-    if verifying_key.is_weak() {
-        return Err(MutationError(
-            "weak small-order Ed25519 public keys are not accepted for enrollment".into(),
-        ));
-    }
-    Ok(())
+    crate::builder_trust::validate_ed25519_key(key).map_err(store_error)
 }
 
 fn exact_identity(identity: String) -> Result<String, MutationError> {

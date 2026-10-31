@@ -65,6 +65,7 @@ struct LaunchSummaryV1 {
     sha256: [u8; 32],
 }
 
+#[link(name = "iu_planner", kind = "static")]
 extern "C" {
     fn iu_launch_binding_path_summary_v1(path: *const c_char, summary: *mut LaunchSummaryV1)
         -> i32;

@@ -1,6 +1,6 @@
 # P013 trust gates
 
-P013D-2B-1 adds read-only crash-state classification and C17/Rust journal parity. Transaction commit and recovery writes remain unimplemented and are not claimed as complete. See [transaction gates](P013D2B1_TRANSACTION_GATES.md).
+P013D-2B-1 adds read-only crash-state classification and C17/Rust journal parity. That increment was read-only; P013D-2B-3 now supplies privileged persistence and forward recovery. See [transaction gates](P013D2B1_TRANSACTION_GATES.md).
 
 ## Offline implementation status
 
@@ -20,6 +20,16 @@ P013D-2B-1 adds read-only crash-state classification and C17/Rust journal parity
 
 ## P013D-2B-2 mutation planning
 
-The builder-trust plan subcommands produce canonical, snapshot-bound previews for signer add/revoke/rotation and policy add/revoke. `make builder-mutation-test` checks planner operations, CLI grammar, read-only fixture behavior, and Rust/C17 transaction-vector parity. Plans never write stores or transaction files. They report `Persistence: NOT_APPLIED`, `Operational authorization: FALSE`, and independent trust establishment `UNVERIFIED`. Enrollment authentication, privileged persistence, recovery writes, independent rollback protection, production build-origin verification, and protected-origin classification remain outstanding.
+The builder-trust plan subcommands produce canonical, snapshot-bound previews for signer add/revoke/rotation and policy add/revoke. `make builder-mutation-test` checks planner operations, CLI grammar, read-only fixture behavior, and Rust/C17 transaction-vector parity. Plans never write stores or transaction files. They report `Persistence: NOT_APPLIED`, `Operational authorization: FALSE`, and independent trust establishment `UNVERIFIED`. Independent enrollment authentication, independent rollback protection, production build-origin verification, and protected-origin classification remain outstanding; P013D-2B-3 supplies local privileged persistence and recovery.
 
 The publisher command is `iu provenance plan MANIFEST ARTIFACT`. The attestation command is `iu provenance attestation verify ATTESTATION ARTIFACT`; it uses the P013C opened descriptor for P010/C inspection, Rust hashing, exact DSSE payload verification, subject binding, and final revalidation. Read-only builder-store diagnostics are `iu provenance builder-trust status|list|inspect SIGNER_ID`. See [P013C integration gates](P013C_INTEGRATION_GATES.md), [P013D-1 gates](P013D1_ATTESTATION_GATES.md), and [P013D-2A gates](P013D2A_BUILDER_TRUST_GATES.md). Filesystem-only generations are not adversarial rollback protection. Independent production enrollment trust and authoritative protected-origin classification remain unavailable, so overall P013 remains PARTIAL. Physical-device testing remains NOT RUN. Never infer Apple runtime behavior from cross-compilation.
+
+## P013D-2B-3 persistence/recovery
+
+Privileged local builder administration, independent reconstruction, durable
+two-store commit, forward-only recovery and package/publisher lifecycle guards
+are implemented. See [P013D-2B-3 gates](P013D2B3_PERSISTENCE_GATES.md) for required
+fixtures and CI. Prior statements above that privileged persistence/recovery are
+unimplemented describe earlier increments. Independent enrollment authenticity,
+protected-origin classification and privileged-attacker rollback resistance
+remain outstanding; Overall P013: PARTIAL. DEVICE VALIDATION: NOT RUN.

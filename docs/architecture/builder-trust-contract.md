@@ -1,6 +1,6 @@
 # Builder-trust contract
 
-P013D-2B-1 adds a versioned C17 journal codec, matching Rust parser, combined marker parser, and read-only classifier for old, staged, partially replaced, committed, corrupt, unsafe, and conflicting observations. Every journal or stage artifact still withholds signer and policy authority, including a complete new pair; no recovery writes are implemented. See [transaction metadata](builder-trust-transactions.md).
+P013D-2B-1 adds a versioned C17 journal codec, matching Rust parser, combined marker parser, and read-only classifier for old, staged, partially replaced, committed, corrupt, unsafe, and conflicting observations. Every journal or stage artifact still withholds signer and policy authority, including a complete new pair; P013D-2B-3 now supplies the separate privileged writer and recovery engine. See [transaction metadata](builder-trust-transactions.md).
 
 Publisher trust and builder trust are different authorities. P013 publisher keys authenticate publisher statements about artifacts. P013D's builder provider independently maps DSSE signer keys to signer identities and signer identities to authorized builder identities and build policies. A publisher key is never promoted into a builder key automatically.
 
@@ -26,10 +26,20 @@ Local roots bind an exact Ed25519 key ID and public key to one exact signer iden
 
 The read-only provider reports root/policy generations and SHA-256 digests, signer key ID and identity, builder identity, and applicable policy ID. It reloads both stores before returning a successful diagnostic and invalidates trust if file or directory identity, content, or generation changes. If transaction artifacts exist, status reports their classified state and observed store generations while signer and policy access remain unavailable. The local generations do not provide adversarial rollback protection.
 
-P013D-2A does not implement an independently reviewed enrollment chain. Root ownership proves only that local administration installed a file; it does not prove the real-world identity of the named CI system. Thus even a matching production key and policy report `Independent trust establishment: UNVERIFIED` and `BUILD_ORIGIN_UNVERIFIED`. Later P013D-2B increments must establish enrollment, revocation, rotation, transaction commit/recovery writes, and a reviewed rollback strategy before production may claim build origin.
+P013D-2A does not implement an independently reviewed enrollment chain. Root ownership proves only that local administration installed a file; it does not prove the real-world identity of the named CI system. Thus even a matching production key and policy report `Independent trust establishment: UNVERIFIED` and `BUILD_ORIGIN_UNVERIFIED`. P013D-2B-3 supplies explicit local enrollment, revocation, rotation and transaction commit/recovery. Independent external identity and privileged-attacker rollback protection remain unavailable, so production cannot claim verified build origin.
 
 Host tests use deterministic synthetic Ed25519 keys and isolated temporary root/policy stores. No CLI option, environment variable, or production configuration selects those fixtures. Their successful cryptographic and policy verification demonstrates implementation behavior only.
 
-P013D-2B-2 adds deterministic read-only plans for adding/revoking/rotating signers and adding/revoking policies. It derives canonical store bytes, exact generation/digest changes, a compatible prepared journal, and the proposed pair marker, then revalidates the descriptor-bound snapshot. CLI plans report their complete proposed bytes and `Persistence: NOT_APPLIED`. They are not authorization tokens; a future privileged helper must independently reconstruct and revalidate each requested mutation. No trust-store or recovery writes are implemented.
+P013D-2B-2 adds deterministic read-only plans for adding/revoking/rotating signers and adding/revoking policies. It derives canonical store bytes, exact generation/digest changes, a compatible prepared journal, and the proposed pair marker, then revalidates the descriptor-bound snapshot. CLI plans report their complete proposed bytes and `Persistence: NOT_APPLIED`. They are not authorization tokens; the privileged helper independently reconstructs and revalidates each requested mutation. The CLI planner never writes trust state.
 
-Production trust requires an independently authenticated root, a reviewed mapping from root to signer identities and builder IDs, managed key enrollment/revocation/rotation, rollback-resistant lifecycle, and reviewed build-type/source/parameter policy. P013D-2B-2 provides planning only; lifecycle and privileged persistence remain deferred. No GitHub Actions, Sigstore, Fulcio, external PKI authenticity, or SLSA level is asserted. See [storage](builder-trust-storage.md), [policy schema](builder-policy-schema.md), [mutation planning](builder-trust-mutation-planning.md), and [P013D-2B-2 gates](../validation/P013D2B2_MUTATION_GATES.md).
+Production trust requires an independently authenticated root, a reviewed mapping from root to signer identities and builder IDs, managed key enrollment/revocation/rotation, rollback-resistant lifecycle, and reviewed build-type/source/parameter policy. P013D-2B-2 provides planning; P013D-2B-3 supplies lifecycle and privileged persistence. No GitHub Actions, Sigstore, Fulcio, external PKI authenticity, or SLSA level is asserted. See [storage](builder-trust-storage.md), [policy schema](builder-policy-schema.md), [mutation planning](builder-trust-mutation-planning.md), and [P013D-2B-2 gates](../validation/P013D2B2_MUTATION_GATES.md).
+
+## Current P013D-2B-3 behavior
+
+The earlier read-only increment descriptions above are historical. Root-controlled
+privileged persistence and recovery are now implemented, using an in-process
+Rust schema/planner boundary in the C17 installer helper. Local enrollment still
+does not establish external CI identity. The provider requires a settled pair
+and matching marker and rejects all transaction artifacts, including the fixed
+marker stage. See [persistence](builder-trust-persistence.md),
+[recovery](builder-trust-recovery.md), and [lifecycle](builder-trust-lifecycle.md).

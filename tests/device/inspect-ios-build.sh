@@ -125,6 +125,22 @@ inspect_binary "$1"
 inspect_binary "$2"
 if [ "$#" -eq 3 ]; then
     inspect_binary "$3"
+    if nm -g "$3" | grep -q '_iu_builder_admin_v1'; then
+        printf '%s\n' 'PRIVILEGED_BUILDER_LINKAGE: PASS.'
+    else
+        printf '%s\n' 'PRIVILEGED_BUILDER_LINKAGE: FAIL.'
+        INSPECTION_STATUS=1
+    fi
+    if nm -g "$3" | grep -q 'iu_builder_admin_test_v1'; then
+        printf '%s\n' 'PRODUCTION_TEST_HOOK_CHECK: FAIL.'
+        INSPECTION_STATUS=1
+    else
+        printf '%s\n' 'PRODUCTION_TEST_HOOK_CHECK: PASS.'
+    fi
+    if strings "$3" | grep -Eq 'builder-disk-full|builder-fail-post-rename-fsync'; then
+        printf '%s\n' 'PRODUCTION_FAULT_OVERRIDE_CHECK: FAIL.'
+        INSPECTION_STATUS=1
+    fi
 fi
 
 if [ "$INSPECTION_STATUS" -eq 0 ]; then

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Stable management entrypoint. The paired C helper owns all parsing and
-# filesystem changes; this script never sources package or manifest data.
+# filesystem changes, including builder-trust administration and recovery.
+# This script never sources package, manifest, or CLI plan data.
 set -eu
 
 case "$0" in
