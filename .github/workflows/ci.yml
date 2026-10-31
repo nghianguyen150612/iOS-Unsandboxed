@@ -19,6 +19,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run Rust static analysis
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run P013 trust-boundary scan regressions and security suites
+        run: make p013-security-test
       - name: Run trust transaction recovery and interruption fixtures
         run: make trust-recovery-test
       - name: Run the builder trust store and policy fixtures

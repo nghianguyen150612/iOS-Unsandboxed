@@ -7,3 +7,4 @@ mod builder_admin;
 pub mod builder_mutation;
 pub mod builder_transaction;
 pub mod builder_trust;
+mod directory_scan;

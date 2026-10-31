@@ -8,6 +8,7 @@ mod build_attestation;
 mod builder_mutation;
 mod builder_transaction;
 mod builder_trust;
+mod directory_scan;
 mod ipc;
 mod planner;
 mod provenance;

@@ -526,27 +526,27 @@ fn ensure_settled_trust_directory(dir: &File) -> Result<(), TrustLoadError> {
             "cannot scan trust metadata directory",
         ));
     }
-    loop {
-        let entry = unsafe { libc::readdir(stream) };
-        if entry.is_null() {
-            break;
-        }
-        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+    let names = unsafe { crate::directory_scan::read_directory(stream) };
+    let close_result = unsafe { libc::closedir(stream) };
+    let names = names.map_err(|error| {
+        TrustLoadError::pending(format!("trust metadata directory scan failed: {error}"))
+    })?;
+    if close_result != 0 {
+        return Err(TrustLoadError::pending(
+            "cannot close trust metadata directory scan",
+        ));
+    }
+    for name in names {
+        let name = name.as_slice();
         if name != b"."
             && name != b".."
             && name != TRUST_FILE.as_bytes()
             && name != b"generation.v1"
         {
-            unsafe { libc::closedir(stream) };
             return Err(TrustLoadError::pending(
                 "unexpected trust metadata artifact exists",
             ));
         }
-    }
-    if unsafe { libc::closedir(stream) } != 0 {
-        return Err(TrustLoadError::pending(
-            "trust metadata directory scan failed",
-        ));
     }
     Ok(())
 }

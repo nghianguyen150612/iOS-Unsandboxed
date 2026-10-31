@@ -3,6 +3,7 @@
 #include "iu_trust_manager.h"
 #include "iu_trust_store.h"
 #include "iu_trust_transaction.h"
+#include "iu_checked_readdir.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -93,10 +94,10 @@ static int keyfile(const char *path,struct iu_trust_record_v1 *record,const char
 }
 static int compare(const void *a,const void *b){return strcmp(((const struct iu_trust_record_v1 *)a)->key_id,((const struct iu_trust_record_v1 *)b)->key_id);}
 static int scan_artifacts(int dir,unsigned *mask) {
-    int copy=openat(dir,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *stream;struct dirent *e;unsigned found=0;
+    int copy=openat(dir,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *stream;struct dirent *e;unsigned found=0;int next;
     if(copy<0)return -1;
     stream=fdopendir(copy);if(!stream){close(copy);return -1;}
-    while((e=readdir(stream))!=NULL){if(!strcmp(e->d_name,".")||!strcmp(e->d_name,".."))continue;
+    while((next=iu_readdir_checked(stream,&e))>0){if(!strcmp(e->d_name,".")||!strcmp(e->d_name,".."))continue;
         if(!strcmp(e->d_name,"store.v1"))continue;
         if(!strcmp(e->d_name,"transaction.v1")){found|=ART_TX;continue;}
         if(!strcmp(e->d_name,IU_TRUST_TRANSACTION_STAGE_NAME)){found|=ART_STAGE;continue;}
@@ -106,7 +107,9 @@ static int scan_artifacts(int dir,unsigned *mask) {
         if(!strcmp(e->d_name,".generation.tmp")){found|=ART_GENERATION_TMP;continue;}
         printf("Foreign trust metadata preserved: %s\n",e->d_name);closedir(stream);return -1;
     }
-    closedir(stream);*mask=found;return 0;
+    if(next<0){closedir(stream);return -1;}
+    if(closedir(stream)!=0)return -1;
+    *mask=found;return 0;
 }
 static int read_current(struct snapshot *s,uid_t uid,gid_t gid) {
     int r=load_named(s->dir,"store.v1",uid,gid,s->store,sizeof(s->store),&s->store_length,&s->store_stat);

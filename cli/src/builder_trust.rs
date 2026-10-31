@@ -1254,14 +1254,22 @@ fn check_directory_entries(directory: &File) -> Result<BTreeSet<String>, StoreEr
             "cannot scan builder trust directory",
         ));
     }
-    let mut unexpected = false;
+    let scanned = unsafe { crate::directory_scan::read_directory(stream) };
+    let close_result = unsafe { libc::closedir(stream) };
+    let scanned = scanned.map_err(|error| {
+        StoreError::new(
+            StoreErrorKind::Unsafe,
+            format!("cannot completely scan builder trust directory: {error}"),
+        )
+    })?;
+    if close_result != 0 {
+        return Err(StoreError::new(
+            StoreErrorKind::Unsafe,
+            "cannot close builder trust directory scan",
+        ));
+    }
     let mut entries = BTreeSet::new();
-    loop {
-        let entry = unsafe { libc::readdir(stream) };
-        if entry.is_null() {
-            break;
-        }
-        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+    for name in scanned {
         if name != b"."
             && name != b".."
             && name != ROOT_FILE.as_bytes()
@@ -1272,22 +1280,16 @@ fn check_directory_entries(directory: &File) -> Result<BTreeSet<String>, StoreEr
             && name != b"policies.stage.v1"
             && name != b"state.stage.v1"
         {
-            unexpected = true;
-            break;
+            return Err(StoreError::new(
+                StoreErrorKind::Unsafe,
+                "unexpected entry in builder trust directory",
+            ));
         }
         if name != b"." && name != b".." {
-            entries.insert(String::from_utf8_lossy(name).into_owned());
+            entries.insert(String::from_utf8_lossy(&name).into_owned());
         }
     }
-    unsafe { libc::closedir(stream) };
-    if unexpected {
-        Err(StoreError::new(
-            StoreErrorKind::Unsafe,
-            "unexpected entry in builder trust directory",
-        ))
-    } else {
-        Ok(entries)
-    }
+    Ok(entries)
 }
 
 type StoreParser<T> = fn(&[u8]) -> Result<(T, u64), StoreError>;

@@ -21,7 +21,7 @@ HOST_ADMIN_LDFLAGS := $(HOST_ADMIN_LIB) -lpthread -ldl -lm
 IOS_ADMIN_LDFLAGS := $(IOS_ADMIN_LIB) -liconv
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test builder-trust-test builder-transaction-test builder-mutation-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test builder-trust-test builder-transaction-test builder-mutation-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test p013-security-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -40,6 +40,7 @@ help:
 	  'make builder-persistence-test Run privileged canonical builder administration fixtures' \
 	  'make builder-recovery-test Run forward recovery, interruption and corruption fixtures' \
 	  'make builder-lifecycle-test Run shared lock and package trust preservation fixtures' \
+	  'make p013-security-test Run P013 trust-scan regression and security boundary suites' \
 	  'make trust-provider-test Run signed-manifest and trust-anchor fixtures' \
 	  'make origin-policy-test Run fail-closed origin-policy fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
@@ -272,6 +273,16 @@ builder-recovery-test: host-build
 
 builder-lifecycle-test: host-build
 	python3 tests/builder-trust/lifecycle-test.py $(HOST_INSTALLER_HELPER)
+
+p013-security-test: host-build
+	cargo test --locked --workspace directory_scan::tests::
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  tests/trust/readdir-error-test.c $(filter-out native/src/iu_trust_manager.c,$(POLICY_SOURCES)) \
+	  $(HOST_ADMIN_LDFLAGS) -o build/host/readdir-error-test
+	./build/host/readdir-error-test
+	$(MAKE) trust-manager-test trust-recovery-test builder-trust-test builder-transaction-test \
+	  builder-mutation-test builder-persistence-test builder-recovery-test builder-lifecycle-test \
+	  authenticated-binding-test build-attestation-test installer-test
 
 .PHONY: builder-sanitizer-test builder-production-test
 builder-sanitizer-test: host-build

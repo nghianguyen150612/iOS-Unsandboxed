@@ -6,6 +6,7 @@
 #include "iu_policy_manager.h"
 #include "iu_trust_manager.h"
 #include "iu_builder_trust_manager.h"
+#include "iu_checked_readdir.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -944,15 +945,17 @@ static int is_private_temp_name(const char *name)
 }
 static int cleanup_private_temps(struct context *ctx,int dirfd)
 {
-    int copy=openat(dirfd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *entry;int changed=0;if(copy<0)return -1;dir=fdopendir(copy);if(!dir){close(copy);return -1;}
-    while((entry=readdir(dir))!=NULL){struct stat st;if(!is_private_temp_name(entry->d_name))continue;
+    int copy=openat(dirfd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *entry;int changed=0,next;if(copy<0)return -1;dir=fdopendir(copy);if(!dir){close(copy);return -1;}
+    while((next=iu_readdir_checked(dir,&entry))>0){struct stat st;if(!is_private_temp_name(entry->d_name))continue;
         if(fstatat(dirfd,entry->d_name,&st,AT_SYMLINK_NOFOLLOW)!=0){closedir(dir);return -1;}
         if(!stat_expected(ctx,&st)||(st.st_mode&0077)!=0||
            (S_ISREG(st.st_mode)&&st.st_nlink!=1)||(!S_ISREG(st.st_mode)&&!S_ISLNK(st.st_mode))){closedir(dir);return -1;}
         if(S_ISLNK(st.st_mode)){char target[PATH_MAX];ssize_t n=readlinkat(dirfd,entry->d_name,target,sizeof(target)-1U);if(n<0){closedir(dir);return -1;}target[n]='\0';if(strcmp(target,FILES[1].link_target)!=0){closedir(dir);return -1;}}
         if(unlinkat(dirfd,entry->d_name,0)!=0){closedir(dir);return -1;}changed=1;
     }
-    closedir(dir);return changed?fsync_dir(dirfd):0;
+    if(next<0){closedir(dir);return -1;}
+    if(closedir(dir)!=0)return -1;
+    return changed?fsync_dir(dirfd):0;
 }
 static int restore_backup(struct context *ctx,const char *generation,const char *recovery_generation,const struct manifest *alternate)
 {
@@ -1018,32 +1021,36 @@ static int cleanup_stage(struct context *ctx,const char *generation)
 }
 static int clean_all_staging(struct context *ctx)
 {
-    int dupfd;DIR *dir;struct dirent *de;char **names=NULL;size_t count=0,capacity=0;
+    int dupfd,next;DIR *dir;struct dirent *de;char **names=NULL;size_t count=0,capacity=0;
     if(ctx->stagingfd<0)return 0;
     dupfd=openat(ctx->stagingfd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);if(dupfd<0)return -1;dir=fdopendir(dupfd);if(!dir){close(dupfd);return -1;}
-    while((de=readdir(dir))!=NULL){if(strcmp(de->d_name,".")==0||strcmp(de->d_name,"..")==0)continue;
-        if(!safe_generation(de->d_name)){closedir(dir);return -1;}
-        if(count==capacity){size_t next=capacity?capacity*2U:8U;char **grown=realloc(names,next*sizeof(*names));if(!grown){closedir(dir);return -1;}names=grown;capacity=next;}
-        names[count]=strdup(de->d_name);if(names[count]==NULL){closedir(dir);return -1;}++count;
+    while((next=iu_readdir_checked(dir,&de))>0){if(strcmp(de->d_name,".")==0||strcmp(de->d_name,"..")==0)continue;
+        if(!safe_generation(de->d_name)){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}
+        if(count==capacity){size_t grown_capacity=capacity?capacity*2U:8U;char **grown=realloc(names,grown_capacity*sizeof(*names));if(!grown){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}names=grown;capacity=grown_capacity;}
+        names[count]=strdup(de->d_name);if(names[count]==NULL){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}++count;
     }
-    closedir(dir);
+    if(next<0){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}
+    if(closedir(dir)!=0){for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}
     for(size_t i=0;i<count;++i){if(cleanup_stage(ctx,names[i])!=0){for(size_t j=i;j<count;++j)free(names[j]);free(names);return -1;}free(names[i]);}
     free(names);return 0;
 }
 static int directory_empty(int fd)
 {
-    int copy=openat(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *entry;if(copy<0)return -1;dir=fdopendir(copy);if(!dir){close(copy);return -1;}
-    while((entry=readdir(dir))!=NULL){if(strcmp(entry->d_name,".")&&strcmp(entry->d_name,"..")){closedir(dir);return 0;}}
-    closedir(dir);return 1;
+    int copy=openat(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *entry;int next;if(copy<0)return -1;dir=fdopendir(copy);if(!dir){close(copy);return -1;}
+    while((next=iu_readdir_checked(dir,&entry))>0){if(strcmp(entry->d_name,".")&&strcmp(entry->d_name,"..")){closedir(dir);return 0;}}
+    if(next<0){closedir(dir);return -1;}
+    return closedir(dir)==0?1:-1;
 }
 static int data_has_only_staging_and_backups(int fd)
 {
-    int copy=openat(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *entry;int saw_backups=0,saw_staging=0;if(copy<0)return -1;dir=fdopendir(copy);if(!dir){close(copy);return -1;}
-    while((entry=readdir(dir))!=NULL){if(!strcmp(entry->d_name,".")||!strcmp(entry->d_name,".."))continue;
+    int copy=openat(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *entry;int saw_backups=0,saw_staging=0,next;if(copy<0)return -1;dir=fdopendir(copy);if(!dir){close(copy);return -1;}
+    while((next=iu_readdir_checked(dir,&entry))>0){if(!strcmp(entry->d_name,".")||!strcmp(entry->d_name,".."))continue;
         if(!strcmp(entry->d_name,"backups")&&!saw_backups)saw_backups=1;
         else if(!strcmp(entry->d_name,"staging")&&!saw_staging)saw_staging=1;
         else{closedir(dir);return 0;}}
-    closedir(dir);return saw_backups&&saw_staging;
+    if(next<0){closedir(dir);return -1;}
+    if(closedir(dir)!=0)return -1;
+    return saw_backups&&saw_staging;
 }
 static int remove_empty_uninstalled_data(struct context *ctx)
 {
@@ -1115,7 +1122,7 @@ static int check_no_package_transaction(struct context *ctx)
 static int check_no_trust_transaction(struct context *ctx)
 {
     if(ctx->datafd>=0){
-        struct stat st;int dir;int copy;DIR *stream;struct dirent *entry;
+        struct stat st;int dir;int copy;int next;DIR *stream;struct dirent *entry;
         if(fstatat(ctx->datafd,"trusted-publishers",&st,AT_SYMLINK_NOFOLLOW)==0){
             if(!S_ISDIR(st.st_mode)||st.st_uid!=ctx->uid||st.st_gid!=ctx->gid||(st.st_mode&07777)!=0700)
                 return bad("trust metadata directory is unsafe; package mutation refused");
@@ -1124,12 +1131,14 @@ static int check_no_trust_transaction(struct context *ctx)
             copy=openat(dir,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
             if(copy<0){close(dir);return bad("trust metadata directory cannot be scanned safely");}
             stream=fdopendir(copy);if(!stream){close(copy);close(dir);return bad("trust metadata directory cannot be scanned safely");}
-            while((entry=readdir(stream))!=NULL){
+            while((next=iu_readdir_checked(stream,&entry))>0){
                 if(!strcmp(entry->d_name,".")||!strcmp(entry->d_name,"..")||!strcmp(entry->d_name,"store.v1")||!strcmp(entry->d_name,"generation.v1"))continue;
                 closedir(stream);close(dir);
                 return bad("trust transaction or foreign trust artifact is present; package mutation refused");
             }
-            closedir(stream);close(dir);
+            if(next<0){closedir(stream);close(dir);return bad("trust metadata directory scan failed; package mutation refused");}
+            if(closedir(stream)!=0){close(dir);return bad("trust metadata directory close failed; package mutation refused");}
+            close(dir);
         }else if(errno!=ENOENT)return bad("trust metadata path cannot be inspected safely");
     }
     return 0;
@@ -1389,12 +1398,14 @@ static int remove_backup_tree(struct context *ctx,const char *generation)
 }
 static int clean_all_backups(struct context *ctx)
 {
-    int dupfd=openat(ctx->backupsfd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *de;char **names=NULL;size_t count=0,cap=0;
+    int dupfd=openat(ctx->backupsfd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);DIR *dir;struct dirent *de;char **names=NULL;size_t count=0,cap=0;int next;
     if(dupfd<0)return -1;
     dir=fdopendir(dupfd);if(!dir){close(dupfd);return -1;}
-    while((de=readdir(dir))!=NULL){if(strcmp(de->d_name,".")==0||strcmp(de->d_name,"..")==0)continue;if(!safe_generation(de->d_name)){closedir(dir);return -1;}
-        if(count==cap){size_t nc=cap?cap*2U:8U;char **nn=realloc(names,nc*sizeof(*names));if(!nn){closedir(dir);return -1;}names=nn;cap=nc;}names[count]=strdup(de->d_name);if(!names[count++]){closedir(dir);return -1;}}
-    closedir(dir);for(size_t i=0;i<count;++i){if(remove_backup_tree(ctx,names[i])!=0){for(size_t j=i;j<count;++j)free(names[j]);free(names);return -1;}free(names[i]);}free(names);return 0;
+    while((next=iu_readdir_checked(dir,&de))>0){if(strcmp(de->d_name,".")==0||strcmp(de->d_name,"..")==0)continue;if(!safe_generation(de->d_name)){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}
+        if(count==cap){size_t nc=cap?cap*2U:8U;char **nn=realloc(names,nc*sizeof(*names));if(!nn){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}names=nn;cap=nc;}names[count]=strdup(de->d_name);if(!names[count]){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}++count;}
+    if(next<0){closedir(dir);for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}
+    if(closedir(dir)!=0){for(size_t i=0;i<count;++i)free(names[i]);free(names);return -1;}
+    for(size_t i=0;i<count;++i){if(remove_backup_tree(ctx,names[i])!=0){for(size_t j=i;j<count;++j)free(names[j]);free(names);return -1;}free(names[i]);}free(names);return 0;
 }
 static int cmd_uninstall(struct context *ctx)
 {
