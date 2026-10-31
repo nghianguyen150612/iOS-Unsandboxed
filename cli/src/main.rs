@@ -3,8 +3,15 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::process::ExitCode;
 
+mod authenticated_binding;
+mod build_attestation;
+mod builder_mutation;
+mod builder_transaction;
+mod builder_trust;
+mod directory_scan;
 mod ipc;
 mod planner;
+mod provenance;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const USAGE: &str = "Usage: ios-unsandboxed <command> [arguments]\n\
@@ -15,6 +22,24 @@ Commands:\n\
   status                         Show daemon lifecycle and activation status\n\
   inspect <binary>               Inspect a local Mach-O file (read-only)\n\
   plan <binary>                  Preview provenance and launch binding (read-only)\n\
+  provenance verify <manifest> <binary>\n\
+                                 Verify signed evidence (read-only)\n\
+  provenance plan <manifest> <binary>\n\
+                                 Preview descriptor-bound authenticated provenance\n\
+  provenance attestation verify <attestation> <binary>\n\
+                                 Verify signed build evidence (read-only)\n\
+  provenance builder-trust status\n\
+                                 Show read-only local builder trust status\n\
+  provenance builder-trust list\n\
+                                 List signer identities and policy references\n\
+  provenance builder-trust inspect <signer-id>\n\
+                                 Inspect one builder signer identity\n\
+  provenance builder-trust plan add-signer <public-key-file> --identity <signer-id>\n\
+  provenance builder-trust plan revoke-signer <key-id>\n\
+  provenance builder-trust plan rotate-signer <old-key-id> <public-key-file> --new-identity <signer-id>\n\
+  provenance builder-trust plan add-policy <policy-file>\n\
+  provenance builder-trust plan revoke-policy <policy-id>\n\
+                                 Preview a builder trust change (read-only)\n\
   sign <binary> [--entitlements <file>]\n\
                                  Prepare a binary for execution (not implemented)\n\
   install <binary>               Install a binary (not implemented)\n\
@@ -38,6 +63,17 @@ enum Invocation {
     TestCheck(OsString),
     Inspect(OsString),
     Plan(OsString),
+    ProvenanceVerify(OsString, OsString),
+    ProvenancePlan(OsString, OsString),
+    ProvenanceAttestationVerify(OsString, OsString),
+    BuilderTrustStatus,
+    BuilderTrustList,
+    BuilderTrustInspect(OsString),
+    BuilderTrustPlanAddSigner(OsString, OsString),
+    BuilderTrustPlanRevokeSigner(OsString),
+    BuilderTrustPlanRotateSigner(OsString, OsString, OsString),
+    BuilderTrustPlanAddPolicy(OsString),
+    BuilderTrustPlanRevokePolicy(OsString),
     ReservedCommand(&'static str),
 }
 
@@ -92,6 +128,122 @@ fn parse_args(args: &[OsString]) -> Result<Invocation, UsageError> {
             Ok(Invocation::Inspect(args[1].clone()))
         }
         "plan" if args.len() == 2 && !args[1].is_empty() => Ok(Invocation::Plan(args[1].clone())),
+        "provenance"
+            if args.len() == 4
+                && args[1] == OsStr::new("verify")
+                && !args[2].is_empty()
+                && !args[3].is_empty() =>
+        {
+            Ok(Invocation::ProvenanceVerify(
+                args[2].clone(),
+                args[3].clone(),
+            ))
+        }
+        "provenance"
+            if args.len() == 4
+                && args[1] == OsStr::new("plan")
+                && !args[2].is_empty()
+                && !args[3].is_empty() =>
+        {
+            Ok(Invocation::ProvenancePlan(args[2].clone(), args[3].clone()))
+        }
+        "provenance"
+            if args.len() == 5
+                && args[1] == OsStr::new("attestation")
+                && args[2] == OsStr::new("verify")
+                && !args[3].is_empty()
+                && !args[4].is_empty() =>
+        {
+            Ok(Invocation::ProvenanceAttestationVerify(
+                args[3].clone(),
+                args[4].clone(),
+            ))
+        }
+        "provenance"
+            if args.len() == 3
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("status") =>
+        {
+            Ok(Invocation::BuilderTrustStatus)
+        }
+        "provenance"
+            if args.len() == 3
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("list") =>
+        {
+            Ok(Invocation::BuilderTrustList)
+        }
+        "provenance"
+            if args.len() == 4
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("inspect")
+                && !args[3].is_empty()
+                && args[3].to_str().is_some() =>
+        {
+            Ok(Invocation::BuilderTrustInspect(args[3].clone()))
+        }
+        "provenance"
+            if args.len() == 7
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("plan")
+                && args[3] == OsStr::new("add-signer")
+                && args[5] == OsStr::new("--identity")
+                && !args[4].is_empty()
+                && !args[6].is_empty()
+                && args[6].to_str().is_some() =>
+        {
+            Ok(Invocation::BuilderTrustPlanAddSigner(
+                args[4].clone(),
+                args[6].clone(),
+            ))
+        }
+        "provenance"
+            if args.len() == 5
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("plan")
+                && args[3] == OsStr::new("revoke-signer")
+                && !args[4].is_empty()
+                && args[4].to_str().is_some() =>
+        {
+            Ok(Invocation::BuilderTrustPlanRevokeSigner(args[4].clone()))
+        }
+        "provenance"
+            if args.len() == 8
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("plan")
+                && args[3] == OsStr::new("rotate-signer")
+                && args[6] == OsStr::new("--new-identity")
+                && !args[4].is_empty()
+                && !args[5].is_empty()
+                && !args[7].is_empty()
+                && args[4].to_str().is_some()
+                && args[7].to_str().is_some() =>
+        {
+            Ok(Invocation::BuilderTrustPlanRotateSigner(
+                args[4].clone(),
+                args[5].clone(),
+                args[7].clone(),
+            ))
+        }
+        "provenance"
+            if args.len() == 5
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("plan")
+                && args[3] == OsStr::new("add-policy")
+                && !args[4].is_empty() =>
+        {
+            Ok(Invocation::BuilderTrustPlanAddPolicy(args[4].clone()))
+        }
+        "provenance"
+            if args.len() == 5
+                && args[1] == OsStr::new("builder-trust")
+                && args[2] == OsStr::new("plan")
+                && args[3] == OsStr::new("revoke-policy")
+                && !args[4].is_empty()
+                && args[4].to_str().is_some() =>
+        {
+            Ok(Invocation::BuilderTrustPlanRevokePolicy(args[4].clone()))
+        }
         "install" if args.len() == 2 && !args[1].is_empty() => {
             Ok(Invocation::ReservedCommand("install"))
         }
@@ -145,6 +297,116 @@ fn main() -> ExitCode {
                     ExitCode::from(4)
                 }
             }
+        }
+        Ok(Invocation::ProvenanceVerify(manifest, artifact)) => {
+            match provenance::verify_cli(std::path::Path::new(&manifest), &artifact) {
+                Ok((report, accepted)) => {
+                    print!("{report}");
+                    if accepted {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(4)
+                    }
+                }
+                Err(error) => {
+                    eprintln!("ios-unsandboxed: provenance inspection failed: {error}");
+                    ExitCode::from(4)
+                }
+            }
+        }
+        Ok(Invocation::ProvenancePlan(manifest, artifact)) => {
+            let result = authenticated_binding::preview(std::path::Path::new(&manifest), &artifact);
+            print!("{}", result.render());
+            if result.diagnostic_success() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(4)
+            }
+        }
+        Ok(Invocation::ProvenanceAttestationVerify(attestation, artifact)) => {
+            let result = authenticated_binding::preview_attestation(
+                std::path::Path::new(&attestation),
+                &artifact,
+            );
+            print!("{}", result.render());
+            if result.build_origin_verified {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(4)
+            }
+        }
+        Ok(Invocation::BuilderTrustStatus) => {
+            print!(
+                "{}",
+                builder_trust::LocalBuilderVerificationProviderV1::production().status_report()
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Invocation::BuilderTrustList) => {
+            print!(
+                "{}",
+                builder_trust::LocalBuilderVerificationProviderV1::production().list_report()
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Invocation::BuilderTrustInspect(signer_id)) => {
+            print!(
+                "{}",
+                builder_trust::LocalBuilderVerificationProviderV1::production()
+                    .inspect_report(signer_id.to_str().expect("UTF-8 checked by parser"))
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Invocation::BuilderTrustPlanAddSigner(path, identity)) => {
+            let result = builder_mutation::read_public_key_file(std::path::Path::new(&path))
+                .and_then(|public_key| {
+                    builder_mutation::plan_production(
+                        builder_mutation::BuilderMutationRequestV1::AddSigner {
+                            public_key,
+                            signer_identity: identity.to_string_lossy().into_owned(),
+                            enrollment_reference: None,
+                        },
+                    )
+                });
+            print_mutation_plan(result)
+        }
+        Ok(Invocation::BuilderTrustPlanRevokeSigner(key_id)) => {
+            print_mutation_plan(builder_mutation::plan_production(
+                builder_mutation::BuilderMutationRequestV1::RevokeSigner {
+                    key_id: key_id.to_string_lossy().into_owned(),
+                },
+            ))
+        }
+        Ok(Invocation::BuilderTrustPlanRotateSigner(old_key, path, identity)) => {
+            let result = builder_mutation::read_public_key_file(std::path::Path::new(&path))
+                .and_then(|new_public_key| {
+                    builder_mutation::plan_production(
+                        builder_mutation::BuilderMutationRequestV1::RotateSigner {
+                            old_key_id: old_key.to_string_lossy().into_owned(),
+                            new_public_key,
+                            new_signer_identity: identity.to_string_lossy().into_owned(),
+                            enrollment_reference: None,
+                        },
+                    )
+                });
+            print_mutation_plan(result)
+        }
+        Ok(Invocation::BuilderTrustPlanAddPolicy(path)) => {
+            let result = builder_mutation::read_policy_file(std::path::Path::new(&path)).and_then(
+                |policy| {
+                    builder_mutation::plan_production(
+                        builder_mutation::BuilderMutationRequestV1::AddPolicy { policy },
+                    )
+                },
+            );
+            print_mutation_plan(result)
+        }
+        Ok(Invocation::BuilderTrustPlanRevokePolicy(policy_id)) => {
+            print_mutation_plan(builder_mutation::plan_production(
+                builder_mutation::BuilderMutationRequestV1::RevokePolicy {
+                    policy_id: policy_id.to_string_lossy().into_owned(),
+                },
+            ))
         }
         Ok(Invocation::ReservedCommand(command)) => {
             eprintln!(
@@ -205,6 +467,22 @@ fn print_test_check(path: &std::path::Path) -> ExitCode {
         }
         Err(error) => {
             eprintln!("ios-unsandboxed: test socket diagnostic failed ({error})");
+            ExitCode::from(4)
+        }
+    }
+}
+
+fn print_mutation_plan(
+    result: Result<builder_mutation::BuilderMutationPlanV1, builder_mutation::MutationError>,
+) -> ExitCode {
+    match result {
+        Ok(plan) => {
+            print!("{}", plan.render());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("ios-unsandboxed: builder mutation planning failed: {error}");
+            eprintln!("Persistence: NOT_APPLIED\nOperational authorization: FALSE");
             ExitCode::from(4)
         }
     }
@@ -647,6 +925,131 @@ mod tests {
             parse_args(&args(&["plan", "./binary"])),
             Ok(Invocation::Plan(OsString::from("./binary")))
         );
+        assert_eq!(
+            parse_args(&args(&["provenance", "verify", "./manifest", "./binary"])),
+            Ok(Invocation::ProvenanceVerify(
+                OsString::from("./manifest"),
+                OsString::from("./binary")
+            ))
+        );
+        assert_eq!(
+            parse_args(&args(&["provenance", "plan", "./manifest", "./binary"])),
+            Ok(Invocation::ProvenancePlan(
+                OsString::from("./manifest"),
+                OsString::from("./binary")
+            ))
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "attestation",
+                "verify",
+                "./attestation.dsse.json",
+                "./binary",
+            ])),
+            Ok(Invocation::ProvenanceAttestationVerify(
+                OsString::from("./attestation.dsse.json"),
+                OsString::from("./binary")
+            ))
+        );
+        assert_eq!(
+            parse_args(&args(&["provenance", "builder-trust", "status"])),
+            Ok(Invocation::BuilderTrustStatus)
+        );
+        assert_eq!(
+            parse_args(&args(&["provenance", "builder-trust", "list"])),
+            Ok(Invocation::BuilderTrustList)
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "builder-trust",
+                "inspect",
+                "signer-ci-v1"
+            ])),
+            Ok(Invocation::BuilderTrustInspect(OsString::from(
+                "signer-ci-v1"
+            )))
+        );
+        assert!(parse_args(&args(&["provenance", "builder-trust", "inspect", ""])).is_err());
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "builder-trust",
+                "plan",
+                "add-signer",
+                "./key.txt",
+                "--identity",
+                "ci-v1"
+            ])),
+            Ok(Invocation::BuilderTrustPlanAddSigner(
+                OsString::from("./key.txt"),
+                OsString::from("ci-v1")
+            ))
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "builder-trust",
+                "plan",
+                "revoke-signer",
+                "0123456789abcdef0123456789abcdef"
+            ])),
+            Ok(Invocation::BuilderTrustPlanRevokeSigner(OsString::from(
+                "0123456789abcdef0123456789abcdef"
+            )))
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "builder-trust",
+                "plan",
+                "rotate-signer",
+                "0123456789abcdef0123456789abcdef",
+                "./new-key.txt",
+                "--new-identity",
+                "ci-v2"
+            ])),
+            Ok(Invocation::BuilderTrustPlanRotateSigner(
+                OsString::from("0123456789abcdef0123456789abcdef"),
+                OsString::from("./new-key.txt"),
+                OsString::from("ci-v2")
+            ))
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "builder-trust",
+                "plan",
+                "add-policy",
+                "./policy.json"
+            ])),
+            Ok(Invocation::BuilderTrustPlanAddPolicy(OsString::from(
+                "./policy.json"
+            )))
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "provenance",
+                "builder-trust",
+                "plan",
+                "revoke-policy",
+                "a".repeat(64).as_str()
+            ])),
+            Ok(Invocation::BuilderTrustPlanRevokePolicy(OsString::from(
+                "a".repeat(64)
+            )))
+        );
+        assert!(parse_args(&args(&[
+            "provenance",
+            "builder-trust",
+            "plan",
+            "add-signer",
+            "./key",
+            "--apply",
+            "ci"
+        ]))
+        .is_err());
         assert_eq!(
             parse_args(&args(&["install", "./binary"])),
             Ok(Invocation::ReservedCommand("install"))

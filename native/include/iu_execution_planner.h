@@ -110,6 +110,10 @@ _Static_assert(sizeof(struct iu_execution_plan_v1) == IU_EXECUTION_PLAN_V1_SIZE,
                "execution plan ABI size changed");
 
 int32_t iu_execution_plan_create_v1(const char *path, struct iu_execution_plan_v1 *result);
+/* The descriptor is borrowed and remains owned by the caller. P010 obtains
+ * path/canonicalization evidence separately, but hashes and parses this fd. */
+int32_t iu_execution_plan_create_fd_v2(int borrowed_fd, const char *requested_path,
+                                       struct iu_execution_plan_v1 *result);
 int32_t iu_execution_plan_revalidate_v1(const struct iu_execution_plan_v1 *plan);
 const char *iu_execution_plan_preparation_name_v1(uint32_t state);
 const char *iu_execution_plan_preview_name_v1(uint32_t status);

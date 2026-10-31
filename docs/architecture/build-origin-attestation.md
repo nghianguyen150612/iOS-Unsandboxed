@@ -1,0 +1,7 @@
+# Build-origin evidence boundary
+
+P013 manifests carry an artifact identity plus claimed build artifact ID, source repository, source revision, workflow, builder, and publisher. These fields are included in the Ed25519 signed bytes. The signature establishes that a trusted publisher made those claims; it does not independently establish that the binary was built from that source or workflow.
+
+P013D implements a bounded offline verifier for DSSE Protocol v1.0.2, in-toto Statement v1, and the SLSA Provenance v1.0 predicate. It checks signatures with `ed25519-dalek`, binds the subject to the P013C opened descriptor, and exposes a versioned independent builder-provider interface. P013D-2A reads a separate canonical local builder key store and exact policy store, but local file ownership does not authenticate the external identity of a CI system. Production therefore keeps `BUILD_ORIGIN_UNVERIFIED`, even when a local policy matches. There is no transparency-log integration or reproducible-build verifier. The pinned Amethyst source revision is not evidence of the installed Amethyst binary's build.
+
+Independent builder trust still needs a reviewed enrollment root and lifecycle/revocation interfaces with rollback protection. The verifier binds the subject digest to the inspected artifact and checks source/build parameters against any configured local policy. Source claims do not constitute independently verified source identity, and no attestation satisfies protected-origin policy without a separate authoritative Apple artifact classifier.

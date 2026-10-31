@@ -14,10 +14,14 @@ NATIVE_SOURCES := native/src/iu_preflight.c native/src/iu_policy.c native/src/iu
 PLANNER_SOURCE := native/src/iu_execution_planner.c
 P012_SOURCES := native/src/iu_artifact_provenance.c native/src/iu_launch_binding.c native/src/iu_policy_store.c
 LIFECYCLE_SOURCE := native/src/iu_service_lifecycle.c
-POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
+POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_builder_transaction.c native/src/iu_builder_trust_manager.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) $(PLANNER_SOURCE)
+HOST_ADMIN_LIB := build/admin-testing/debug/libios_unsandboxed.a
+IOS_ADMIN_LIB := target/$(IOS_TARGET)/release/libios_unsandboxed.a
+HOST_ADMIN_LDFLAGS := $(HOST_ADMIN_LIB) -lpthread -ldl -lm
+IOS_ADMIN_LDFLAGS := $(IOS_ADMIN_LIB) -liconv
 NATIVE_INCLUDES := -Inative/include
 
-.PHONY: provenance-test launch-binding-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
+.PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test builder-trust-test builder-transaction-test builder-mutation-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test p013-security-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
 
 help:
 	@printf '%s\n' \
@@ -29,13 +33,23 @@ help:
 	  'make policy-test  Run policy store and manager fixtures' \
 	  'make provenance-test Run evidence and trust-boundary fixtures' \
 	  'make launch-binding-test Run identity and scope fixtures' \
+	  'make authenticated-binding-test Run descriptor-bound authenticated preview fixtures' \
+	  'make build-attestation-test Run DSSE/SLSA verification and P013C binding fixtures' \
+	  'make builder-trust-test Run read-only builder root, policy, provider, and CLI fixtures' \
+	  'make builder-mutation-test Run deterministic read-only builder mutation plans' \
+	  'make builder-persistence-test Run privileged canonical builder administration fixtures' \
+	  'make builder-recovery-test Run forward recovery, interruption and corruption fixtures' \
+	  'make builder-lifecycle-test Run shared lock and package trust preservation fixtures' \
+	  'make p013-security-test Run P013 trust-scan regression and security boundary suites' \
+	  'make trust-provider-test Run signed-manifest and trust-anchor fixtures' \
+	  'make origin-policy-test Run fail-closed origin-policy fixtures' \
 	  'make native-test Run C17 preflight, policy, and peer-auth fixtures' \
 	  'make state-test  Run read-only persistent-state safety fixtures' \
 	  'make ipc-test    Run local socket, protocol, and peer-auth tests' \
 	  'make packaging-test Parse and check the passive LaunchDaemon plist' \
 	  'make installer-test Run isolated rootful installer transaction fixtures' \
 	  'make package-rootful Build the deterministic Apple ARM64 rootful distribution (macOS)' \
-	  'make device-harness-test Run host fixtures for the safe device harness' \
+	  'make device-harness-test Run P006/P013E-2 device qualification host fixtures' \
 	  'make smoke-test  Check host CLI and daemon help/version/fail-safe modes' \
 	  'make build-ios   Cross-compile CLI, daemon, and installer helper for ARM64 iOS 12.0+' \
 	  'make clean       Remove generated build artifacts'
@@ -44,11 +58,12 @@ build: host-build
 
 host-build:
 	cargo build --locked --workspace
+	cargo build --locked --lib --features builder-admin-testing --target-dir build/admin-testing
 	mkdir -p build/host
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) -Idaemon/include \
 	  daemon/src/main.c daemon/src/ipc_server.c daemon/src/peer_auth.c $(NATIVE_SOURCES) -o $(HOST_DAEMON)
 	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 -DIU_INSTALLER_TESTING $(NATIVE_INCLUDES) \
-	  native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) -o $(HOST_INSTALLER_HELPER)
+	  native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) $(HOST_ADMIN_LDFLAGS) -o $(HOST_INSTALLER_HELPER)
 
 test: host-build
 	cargo test --locked --workspace
@@ -62,6 +77,20 @@ test: host-build
 	$(MAKE) policy-test
 	$(MAKE) provenance-test
 	$(MAKE) launch-binding-test
+	$(MAKE) authenticated-binding-test
+	$(MAKE) build-attestation-test
+	$(MAKE) builder-trust-test
+	$(MAKE) builder-transaction-test
+	$(MAKE) builder-mutation-test
+	$(MAKE) builder-persistence-test
+	$(MAKE) builder-recovery-test
+	$(MAKE) builder-lifecycle-test
+	$(MAKE) builder-production-test
+	$(MAKE) trust-provider-test
+	$(MAKE) trust-format-test
+	$(MAKE) trust-manager-test
+	$(MAKE) trust-recovery-test
+	$(MAKE) origin-policy-test
 	$(MAKE) device-harness-test
 	$(MAKE) smoke-test
 
@@ -95,6 +124,7 @@ service-test: host-build
 
 device-harness-test:
 	python3 tests/device/host-fixture-test.py
+	python3 tests/device/p013e2_test.py
 
 smoke-test: host-build
 	./tests/host-smoke.sh
@@ -146,7 +176,7 @@ build-ios: check-ios-toolchain
 	xcrun --sdk iphoneos clang -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
 	  -target arm64-apple-ios$(IOS_DEPLOYMENT_TARGET) \
 	  -isysroot "$$(xcrun --sdk iphoneos --show-sdk-path)" \
-	  native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) -o $(IOS_INSTALLER_HELPER)
+	  native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) $(IOS_ADMIN_LDFLAGS) -o $(IOS_INSTALLER_HELPER)
 
 package-rootful: build-ios
 	python3 scripts/build-rootful-package.sh
@@ -170,3 +200,99 @@ launch-binding-test:
 	python3 tests/launch-binding/fixtures.py build/host/launch-scope-test build/host/launch-binding-test
 	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_LAUNCH_BINDING_TESTING $(NATIVE_INCLUDES) tests/launch-binding/launch-binding-test.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) -o build/host/launch-binding-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/launch-binding/fixtures.py build/host/launch-binding-sanitized-test; else echo 'Launch binding sanitizers unavailable'; fi
 	@if [ -x target/debug/ios-unsandboxed ]; then python3 tests/launch-binding/cli-test.py; if nm target/debug/ios-unsandboxed | grep -q iu_provenance_test_verify; then echo 'test verifier leaked into CLI' >&2; exit 1; fi; fi
+
+authenticated-binding-test:
+	cargo test --locked --workspace authenticated_binding::tests::
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  tests/authenticated-binding/abi-test.c $(P012_SOURCES) $(NATIVE_SOURCES) $(PLANNER_SOURCE) \
+	  -o build/host/authenticated-binding-abi-test
+	python3 tests/authenticated-binding/abi-fixtures.py build/host/authenticated-binding-abi-test
+	@if $(CC) -std=c17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
+	  $(NATIVE_INCLUDES) tests/authenticated-binding/abi-test.c $(P012_SOURCES) $(NATIVE_SOURCES) \
+	  $(PLANNER_SOURCE) -o build/host/authenticated-binding-abi-sanitized-test >/dev/null 2>&1; then \
+	  ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+	    python3 tests/authenticated-binding/abi-fixtures.py build/host/authenticated-binding-abi-sanitized-test; \
+	else echo 'Authenticated-binding sanitizers unavailable; strict C17 ABI fixture run completed.'; fi
+
+build-attestation-test:
+	cargo test --locked --workspace build_attestation::tests::
+	cargo test --locked --workspace authenticated_binding::tests::attestation
+	cargo build --locked --workspace
+	python3 tests/attestation/cli-test.py target/debug/ios-unsandboxed
+
+builder-trust-test:
+	cargo build --locked --workspace
+	cargo test --locked --workspace builder_trust::tests::
+	python3 tests/builder-trust/cli-test.py target/debug/ios-unsandboxed
+
+builder-transaction-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/builder-trust/transaction-test.c native/src/iu_builder_transaction.c -o build/host/builder-transaction-test
+	python3 tests/builder-trust/transaction-fixtures.py build/host/builder-transaction-test
+	cargo test --locked --workspace builder_transaction::tests::
+	@if $(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie $(NATIVE_INCLUDES) tests/builder-trust/transaction-test.c native/src/iu_builder_transaction.c -o build/host/builder-transaction-sanitized >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/builder-trust/transaction-fixtures.py build/host/builder-transaction-sanitized; else echo 'Builder transaction sanitizers unavailable'; fi
+
+builder-mutation-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/builder-trust/transaction-test.c native/src/iu_builder_transaction.c -o build/host/builder-transaction-test
+	cargo build --locked --workspace
+	cargo test --locked --workspace builder_mutation::tests::
+	cargo test --locked --workspace tests::reserved_commands_accept_the_documented_shapes
+	python3 tests/builder-trust/mutation-fixtures.py build/host/builder-transaction-test target/debug/ios-unsandboxed
+
+trust-provider-test:
+	cargo test --locked --workspace provenance::tests::
+
+trust-format-test:
+	mkdir -p build/host
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/trust/trust-store-test.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) -o build/host/trust-store-test
+	python3 tests/trust/trust-format-roundtrip.py build/host/trust-store-test
+	@if $(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie $(NATIVE_INCLUDES) tests/trust/trust-store-test.c native/src/iu_trust_store.c native/src/iu_trust_transaction.c native/src/iu_trust_manager.c $(NATIVE_SOURCES) -o build/host/trust-store-sanitized-test >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/trust/trust-format-roundtrip.py build/host/trust-store-sanitized-test; else echo 'Trust format sanitizers unavailable'; fi
+
+origin-policy-test:
+	cargo test --locked --workspace provenance::tests::signed_claims_are_authenticated_but_origin_remains_unverified
+	cargo test --locked --workspace provenance::tests::revoked_anchor_has_valid_signature_but_is_not_trusted
+
+.PHONY: trust-manager-test
+trust-manager-test: host-build
+	python3 tests/trust/trust-manager-test.py $(HOST_INSTALLER_HELPER)
+
+trust-recovery-test: host-build
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/trust/trust-transaction-test.c native/src/iu_trust_transaction.c -o build/host/trust-transaction-test
+	./build/host/trust-transaction-test
+	python3 tests/trust/trust-recovery-test.py $(HOST_INSTALLER_HELPER)
+	@if $(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_INSTALLER_TESTING $(NATIVE_INCLUDES) native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) $(HOST_ADMIN_LDFLAGS) -o build/host/installer-helper-sanitized >/dev/null 2>&1; then ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/trust/trust-recovery-test.py build/host/installer-helper-sanitized; else echo 'Trust recovery sanitizers unavailable; strict C17 recovery fixtures completed.'; fi
+
+.PHONY: builder-persistence-test builder-recovery-test builder-lifecycle-test
+builder-persistence-test: host-build
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) tests/builder-trust/admin-abi-test.c $(HOST_ADMIN_LDFLAGS) -o build/host/builder-admin-abi-test
+	python3 tests/builder-trust/persistence-test.py $(HOST_INSTALLER_HELPER)
+
+builder-recovery-test: host-build
+	python3 tests/builder-trust/recovery-test.py $(HOST_INSTALLER_HELPER)
+
+builder-lifecycle-test: host-build
+	python3 tests/builder-trust/lifecycle-test.py $(HOST_INSTALLER_HELPER)
+
+p013-security-test: host-build
+	cargo test --locked --workspace directory_scan::tests::
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) \
+	  tests/trust/readdir-error-test.c $(filter-out native/src/iu_trust_manager.c,$(POLICY_SOURCES)) \
+	  $(HOST_ADMIN_LDFLAGS) -o build/host/readdir-error-test
+	./build/host/readdir-error-test
+	$(MAKE) trust-manager-test trust-recovery-test builder-trust-test builder-transaction-test \
+	  builder-mutation-test builder-persistence-test builder-recovery-test builder-lifecycle-test \
+	  authenticated-binding-test build-attestation-test installer-test
+
+.PHONY: builder-sanitizer-test builder-production-test
+builder-sanitizer-test: host-build
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie -DIU_INSTALLER_TESTING $(NATIVE_INCLUDES) native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) $(HOST_ADMIN_LDFLAGS) -o build/host/builder-admin-sanitized
+	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/builder-trust/recovery-test.py build/host/builder-admin-sanitized
+	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 python3 tests/builder-trust/lifecycle-test.py build/host/builder-admin-sanitized
+
+builder-production-test: host-build
+	$(CC) -std=c17 -Wall -Wextra -Wpedantic -Werror -O2 $(NATIVE_INCLUDES) native/src/iu_installer.c $(LIFECYCLE_SOURCE) $(POLICY_SOURCES) target/debug/libios_unsandboxed.a -lpthread -ldl -lm -o build/host/installer-helper-production
+	@if nm build/host/installer-helper-production | grep -q iu_builder_admin_test_v1; then echo 'builder test hook leaked into production' >&2; exit 1; fi
+	@if build/host/installer-helper-production builder-trust recover --test-root /tmp --apply --confirm; then echo 'production accepted fixture root' >&2; exit 1; fi
+	@if build/host/installer-helper-production builder-trust recover --test-interrupt-at builder-before-stage --apply --confirm; then echo 'production accepted fault hook' >&2; exit 1; fi

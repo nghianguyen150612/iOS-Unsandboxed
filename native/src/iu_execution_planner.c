@@ -202,19 +202,34 @@ static void evaluate_policy_and_capabilities(struct iu_execution_plan_v1 *r, con
     else r->preview_status = IU_EXECUTION_PREVIEW_RUNTIME_NOT_VERIFIED;
 }
 
-int32_t iu_execution_plan_create_v1(const char *path, struct iu_execution_plan_v1 *r)
+static int32_t execution_plan_create(const char *path, int borrowed_fd,
+                                    struct iu_execution_plan_v1 *r)
 {
     struct opened_path opened;
     struct opened_path rebound;
     struct stat before, after, path_after;
     struct stat rebound_status;
     struct iu_ame_macho_result_v1 macho;
-    int rc, parser_rc, hash_rc;
+    int rc, parser_rc, hash_rc, inspection_fd;
     if (r == NULL) return -IU_EXECUTION_PLAN_ERROR_INVALID_ARGUMENT;
     set_defaults(r);
     rc = open_identity_path(path, &opened, &before);
     if (rc != 0) { r->error_code = (uint32_t)-rc; return rc; }
-    parser_rc = iu_ame_macho_inspect_fd_v1(opened.fd, &macho);
+    inspection_fd = borrowed_fd >= 0 ? borrowed_fd : opened.fd;
+    if (borrowed_fd >= 0) {
+        struct stat descriptor_before;
+        if (fstat(borrowed_fd, &descriptor_before) != 0) {
+            close_opened(&opened); r->error_code = IU_EXECUTION_PLAN_ERROR_IO;
+            return -IU_EXECUTION_PLAN_ERROR_IO;
+        }
+        if (!stat_same(&before, &descriptor_before)) {
+            close_opened(&opened); r->error_code = IU_EXECUTION_PLAN_ERROR_IDENTITY_CHANGED;
+            r->identity_status = IU_EXECUTION_IDENTITY_CHANGED;
+            r->preview_status = IU_EXECUTION_PREVIEW_IDENTITY_CHANGED;
+            return -IU_EXECUTION_PLAN_ERROR_IDENTITY_CHANGED;
+        }
+    }
+    parser_rc = iu_ame_macho_inspect_fd_v1(inspection_fd, &macho);
     if (parser_rc != 0) {
         rc = parser_rc == -IU_AME_ERROR_IDENTITY_MISMATCH ? IU_EXECUTION_PLAN_ERROR_IDENTITY_CHANGED : IU_EXECUTION_PLAN_ERROR_IO;
         close_opened(&opened); r->error_code = (uint32_t)rc;
@@ -223,7 +238,7 @@ int32_t iu_execution_plan_create_v1(const char *path, struct iu_execution_plan_v
         }
         return -rc;
     }
-    hash_rc = iu_ame_sha256_fd_v1(opened.fd, r->sha256);
+    hash_rc = iu_ame_sha256_fd_v1(inspection_fd, r->sha256);
     if (hash_rc != 0) {
         rc = hash_rc == -IU_AME_ERROR_IDENTITY_MISMATCH ? IU_EXECUTION_PLAN_ERROR_IDENTITY_CHANGED : IU_EXECUTION_PLAN_ERROR_IO;
         close_opened(&opened); r->error_code = (uint32_t)rc;
@@ -232,7 +247,7 @@ int32_t iu_execution_plan_create_v1(const char *path, struct iu_execution_plan_v
         }
         return -rc;
     }
-    if (fstat(opened.fd, &after) != 0) {
+    if (fstat(inspection_fd, &after) != 0) {
         close_opened(&opened); r->error_code = IU_EXECUTION_PLAN_ERROR_IO;
         return -IU_EXECUTION_PLAN_ERROR_IO;
     }
@@ -283,6 +298,24 @@ int32_t iu_execution_plan_create_v1(const char *path, struct iu_execution_plan_v
     r->operational_authorization = 0; r->device_runtime_verified = 0;
     close_opened(&opened);
     return 0;
+}
+
+int32_t iu_execution_plan_create_v1(const char *path, struct iu_execution_plan_v1 *r)
+{
+    return execution_plan_create(path, -1, r);
+}
+
+int32_t iu_execution_plan_create_fd_v2(int borrowed_fd, const char *requested_path,
+                                       struct iu_execution_plan_v1 *r)
+{
+    if (borrowed_fd < 0) {
+        if (r != NULL) {
+            set_defaults(r);
+            r->error_code = IU_EXECUTION_PLAN_ERROR_INVALID_ARGUMENT;
+        }
+        return -IU_EXECUTION_PLAN_ERROR_INVALID_ARGUMENT;
+    }
+    return execution_plan_create(requested_path, borrowed_fd, r);
 }
 
 static int canonical_record_path_valid(const char *path, uint32_t length)

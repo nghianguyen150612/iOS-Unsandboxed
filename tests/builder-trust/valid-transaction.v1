@@ -1,0 +1,14 @@
+ios-unsandboxed-builder-transaction
+schema_version=1
+operation=combined
+old_root_generation=none
+new_root_generation=1
+old_root_sha256=none
+new_root_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+old_policy_generation=none
+new_policy_generation=1
+old_policy_sha256=none
+new_policy_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+stage_roots=roots.stage.v1
+stage_policies=policies.stage.v1
+phase=prepared

@@ -37,6 +37,11 @@ MACH_O_ORDER = (
     "payload/bin/ios-unsandboxedd",
     "payload/share/installer-helper",
 )
+IOS_SYSTEM_LIBRARIES = {
+    "/usr/lib/libSystem.B.dylib",
+    # Rust's Apple target links this public iOS SDK system library for std.
+    "/usr/lib/libiconv.2.dylib",
+}
 
 
 class BuildError(RuntimeError):
@@ -92,7 +97,7 @@ def inspect_macho(path: Path) -> None:
         raise BuildError(f"{path} does not declare the required iOS platform and 12.0 minimum target")
     dependencies = run("otool", "-L", str(path)).stdout.splitlines()[1:]
     unexpected = [line.strip() for line in dependencies
-                  if line.strip() and line.strip().split(" ", 1)[0] != "/usr/lib/libSystem.B.dylib"]
+                  if line.strip() and line.strip().split(" ", 1)[0] not in IOS_SYSTEM_LIBRARIES]
     if unexpected:
         raise BuildError(f"unexpected iOS runtime dependencies in {path}: {', '.join(unexpected)}")
 

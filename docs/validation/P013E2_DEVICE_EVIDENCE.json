@@ -1,0 +1,45 @@
+{
+  "blockers": [
+    "No authorized reference-device SSH target/session or explicit temporary-runtime approval was supplied; no device command was run."
+  ],
+  "device": {
+    "expected_profile": {
+      "architecture": "arm64",
+      "ios_version": "12.5.7",
+      "model": "iPad4,4"
+    },
+    "observed": {
+      "architecture": null,
+      "ios_version": null,
+      "model": null,
+      "os_build": null
+    },
+    "profile_match": "NOT RUN",
+    "session_identifier": null
+  },
+  "evidence_origin": "no_device_session",
+  "generated_at_utc": "2026-10-31T13:32:54Z",
+  "limitations": [
+    "No physical-device command was run; expected values remain separate from observed values."
+  ],
+  "observations": [],
+  "qualification_status": "P013E-2: PARTIAL (offline harness complete; physical-device validation NOT RUN)",
+  "runtime_matrix": {
+    "actual_amethyst_hook_activity": "NOT RUN",
+    "amethyst_component_detection": "NOT RUN",
+    "amethyst_installed_build_identity": "NOT RUN",
+    "arm64_macho_loader_acceptance": "NOT RUN",
+    "builder_signer_detail_inspect": "NOT RUN",
+    "builder_trust_read_only_diagnostics": "NOT RUN",
+    "cli_version_startup": "NOT RUN",
+    "daemon_temporary_diagnostic_startup": "NOT RUN",
+    "dsse_offline_fixture_verification": "NOT RUN",
+    "execution_activation_remains_disabled": "NOT RUN",
+    "kernel_filesystem_durability": "NOT RUN",
+    "native_c17_preflight": "NOT RUN",
+    "rootful_filesystem_metadata": "NOT RUN",
+    "rust_runtime_startup": "NOT RUN",
+    "temporary_ipc_peer_credentials": "NOT RUN"
+  },
+  "schema_version": "p013e2.device-evidence.v1"
+}

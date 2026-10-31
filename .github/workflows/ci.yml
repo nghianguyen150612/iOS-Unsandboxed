@@ -19,6 +19,18 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run Rust static analysis
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run P013 trust-boundary scan regressions and security suites
+        run: make p013-security-test
+      - name: Run trust transaction recovery and interruption fixtures
+        run: make trust-recovery-test
+      - name: Run the builder trust store and policy fixtures
+        run: make builder-trust-test
+      - name: Run builder transaction codec fixtures
+        run: make builder-transaction-test
+      - name: Run builder mutation planning fixtures
+        run: make builder-mutation-test
+      - name: Run privileged builder persistence, recovery and lifecycle fixtures
+        run: make builder-persistence-test builder-recovery-test builder-lifecycle-test builder-sanitizer-test
       - name: Run Rust, native, provenance, launch binding, policy, IPC, packaging, installer, and smoke tests
         run: make test
 
@@ -31,7 +43,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
-      - name: Cross-compile and assemble rootful package for iOS 12.0+
+      - name: Cross-compile updated CLI, daemon, and installer helper for iOS 12.0+ and assemble the rootful package
         run: make package-rootful
       - name: Inspect Apple ARM64 Mach-O outputs and signing status
         run: tests/device/inspect-ios-build.sh target/aarch64-apple-ios/release/ios-unsandboxed build/ios/ios-unsandboxedd build/ios/installer-helper

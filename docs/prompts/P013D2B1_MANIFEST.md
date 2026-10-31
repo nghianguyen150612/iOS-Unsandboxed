@@ -1,0 +1,3 @@
+# P013D-2B-1 implementation manifest
+
+Offline transaction foundation: canonical C17 and Rust journal parsing, Rust combined marker parsing, read-only classification from validated store/stage/marker digests, and fail-closed transaction-aware builder-trust diagnostics. The shared C/Rust corpus and adversarial reader fixtures cover the supported v1 profile. Production independent trust establishment remains unverified, build origin unverified, protected origin unknown, and operational authorization false. Enrollment, mutation, commit/recovery writes, execution, and device validation are excluded.

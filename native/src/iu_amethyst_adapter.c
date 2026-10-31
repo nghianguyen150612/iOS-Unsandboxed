@@ -85,6 +85,11 @@ static void sha_transform(struct sha256_ctx *c, const uint8_t *p)
 static void sha_init(struct sha256_ctx *c){static const uint32_t iv[8]={0x6a09e667U,0xbb67ae85U,0x3c6ef372U,0xa54ff53aU,0x510e527fU,0x9b05688cU,0x1f83d9abU,0x5be0cd19U};memcpy(c->h,iv,sizeof(iv));c->bits=0;c->used=0;}
 static void sha_update(struct sha256_ctx *c,const uint8_t *p,size_t n){c->bits+=(uint64_t)n*8U;while(n){size_t take=64-c->used;if(take>n)take=n;memcpy(c->block+c->used,p,take);c->used+=take;p+=take;n-=take;if(c->used==64){sha_transform(c,c->block);c->used=0;}}}
 static void sha_final(struct sha256_ctx *c,uint8_t out[32]){uint64_t bits=c->bits;size_t i;c->block[c->used++]=0x80;if(c->used>56){while(c->used<64)c->block[c->used++]=0;sha_transform(c,c->block);c->used=0;}while(c->used<56)c->block[c->used++]=0;for(i=0;i<8;i++)c->block[63-i]=(uint8_t)(bits>>(i*8));sha_transform(c,c->block);for(i=0;i<8;i++){out[i*4]=(uint8_t)(c->h[i]>>24);out[i*4+1]=(uint8_t)(c->h[i]>>16);out[i*4+2]=(uint8_t)(c->h[i]>>8);out[i*4+3]=(uint8_t)c->h[i];}}
+int32_t iu_ame_sha256_bytes_v1(const uint8_t *bytes,size_t length,uint8_t digest[IU_AME_SHA256_SIZE]) {
+    struct sha256_ctx hash;
+    if (!digest || (!bytes && length) || length > UINT64_MAX / 8U) return -1;
+    sha_init(&hash); if(length) sha_update(&hash,bytes,length); sha_final(&hash,digest); return 0;
+}
 
 static uint32_t rd32le(const uint8_t *p){return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);}
 static uint32_t rd32be(const uint8_t *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|(uint32_t)p[3];}
