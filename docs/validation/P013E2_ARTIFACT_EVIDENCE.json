@@ -1,0 +1,107 @@
+{
+  "amethyst_trust": "UNVERIFIED",
+  "artifact_sha256": "16684907c33757e2fa1e739bca8f3efbff43f4d45d397bb4b95767711f30db3d",
+  "artifact_zip": "p013e2-artifact-run-41201769177.zip",
+  "binaries": {
+    "payload/bin/ios-unsandboxed": {
+      "architecture": "arm64",
+      "builder_admin_linkage": "FAIL",
+      "builder_admin_test_hook_absent": "PASS",
+      "code_signature_metadata": "unsigned",
+      "code_signature_trusted_by_amethyst": "UNVERIFIED",
+      "dynamic_dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/usr/lib/libiconv.2.dylib"
+      ],
+      "file_type": "MH_EXECUTE",
+      "manifest_signature_consistency": "PASS",
+      "minimum_ios": "12.0.0",
+      "minimum_ios_check": "PASS",
+      "platform_id": 2,
+      "production_test_hook_check": "PASS",
+      "sha256": "d83c016ce20aff4988ea1951b711ce08fa5a2a48aea8f46c22c19c416e134d9c",
+      "size_bytes": 1038064,
+      "test_hook_markers": [],
+      "test_hook_symbols": []
+    },
+    "payload/bin/ios-unsandboxedd": {
+      "architecture": "arm64",
+      "builder_admin_linkage": "FAIL",
+      "builder_admin_test_hook_absent": "PASS",
+      "code_signature_metadata": "unsigned",
+      "code_signature_trusted_by_amethyst": "UNVERIFIED",
+      "dynamic_dependencies": [
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "file_type": "MH_EXECUTE",
+      "manifest_signature_consistency": "PASS",
+      "minimum_ios": "12.0.0",
+      "minimum_ios_check": "PASS",
+      "platform_id": 2,
+      "production_test_hook_check": "PASS",
+      "sha256": "668f9a1e7cc72caa36ab038cd94d0249d54d4a864e4d9395d9eb54dffce13b00",
+      "size_bytes": 71648,
+      "test_hook_markers": [],
+      "test_hook_symbols": []
+    },
+    "payload/share/installer-helper": {
+      "architecture": "arm64",
+      "builder_admin_linkage": "PASS",
+      "builder_admin_test_hook_absent": "PASS",
+      "code_signature_metadata": "unsigned",
+      "code_signature_trusted_by_amethyst": "UNVERIFIED",
+      "dynamic_dependencies": [
+        "/usr/lib/libSystem.B.dylib",
+        "/usr/lib/libiconv.2.dylib"
+      ],
+      "file_type": "MH_EXECUTE",
+      "manifest_signature_consistency": "PASS",
+      "minimum_ios": "12.0.0",
+      "minimum_ios_check": "PASS",
+      "platform_id": 2,
+      "production_test_hook_check": "PASS",
+      "sha256": "7fb68092385440efbde985c690dbd42014890b73fa8df59de61aed2ed0fbb322",
+      "size_bytes": 2439576,
+      "test_hook_markers": [],
+      "test_hook_symbols": []
+    }
+  },
+  "integrity": "PASS",
+  "limitations": [
+    "Code-signature metadata does not establish Amethyst trust or device loader acceptance.",
+    "Artifact inspection does not establish runtime behavior or physical-device compatibility."
+  ],
+  "manifest_binary_signing": {
+    "payload/bin/ios-unsandboxed": {
+      "classification": "unsigned",
+      "verification": "not_applicable"
+    },
+    "payload/bin/ios-unsandboxedd": {
+      "classification": "unsigned",
+      "verification": "not_applicable"
+    },
+    "payload/share/installer-helper": {
+      "classification": "unsigned",
+      "verification": "not_applicable"
+    }
+  },
+  "package_archive": "ios-unsandboxed-0.1.0-rootful-arm64.tar.gz",
+  "package_archive_sha256": "32fbcebe5ed4f04f371b1e43c8a38fb73ab5b9ce2addb92a2902c03e72043645",
+  "package_directory": "ios-unsandboxed-0.1.0-rootful-arm64",
+  "package_manifest_sha256": "0ae85825b4aaa0d45c960aa6e740eaaea882d1becd7e15df8f2f691b043c4900",
+  "package_signing_classification": "unsigned",
+  "package_target": {
+    "architecture": "arm64",
+    "minimum_ios": "12.0",
+    "platform": "ios"
+  },
+  "schema_version": "p013e2.artifact-inspection.v1",
+  "workflow_run": {
+    "conclusion": "success",
+    "expected_head_sha": "3371d714876cba5c5ad7d8a5724942e46375df5f",
+    "observed_head_sha": "3371d714876cba5c5ad7d8a5724942e46375df5f",
+    "result": "PASS",
+    "run_id": "41201769177",
+    "status": "completed"
+  }
+}

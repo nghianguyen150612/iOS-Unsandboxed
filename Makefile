@@ -49,7 +49,7 @@ help:
 	  'make packaging-test Parse and check the passive LaunchDaemon plist' \
 	  'make installer-test Run isolated rootful installer transaction fixtures' \
 	  'make package-rootful Build the deterministic Apple ARM64 rootful distribution (macOS)' \
-	  'make device-harness-test Run host fixtures for the safe device harness' \
+	  'make device-harness-test Run P006/P013E-2 device qualification host fixtures' \
 	  'make smoke-test  Check host CLI and daemon help/version/fail-safe modes' \
 	  'make build-ios   Cross-compile CLI, daemon, and installer helper for ARM64 iOS 12.0+' \
 	  'make clean       Remove generated build artifacts'
@@ -124,6 +124,7 @@ service-test: host-build
 
 device-harness-test:
 	python3 tests/device/host-fixture-test.py
+	python3 tests/device/p013e2_test.py
 
 smoke-test: host-build
 	./tests/host-smoke.sh

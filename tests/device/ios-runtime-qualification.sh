@@ -118,8 +118,12 @@ observe() {
         printf 'MISSING_COMMAND: %s (needed for %s)\n' "$1" "$OBS_LABEL"
         return 127
     fi
+    printf 'COMMAND:'
+    for OBS_ARG do printf ' <%s>' "$OBS_ARG"; done
+    printf '\n'
     OBS_VALUE=$("$@" 2>&1)
     OBS_STATUS=$?
+    printf 'EXIT_STATUS: %s\n' "$OBS_STATUS"
     if [ "$OBS_STATUS" -eq 0 ]; then
         printf 'OBSERVED %s: %s\n' "$OBS_LABEL" "$OBS_VALUE"
     else
@@ -144,14 +148,17 @@ stat_line() {
     fi
     case "$UNAME_SYSTEM" in
         Darwin|FreeBSD|OpenBSD|NetBSD|DragonFly)
+            printf 'STAT_COMMAND: <stat> <-f> <uid=%%u gid=%%g mode=%%Lp type=%%HT size=%%z links=%%l> <%s>\n' "$1"
             STAT_OUTPUT=$(stat -f 'uid=%u gid=%g mode=%Lp type=%HT size=%z links=%l' "$1" 2>/dev/null)
             STAT_STATUS=$?
             ;;
         *)
+            printf 'STAT_COMMAND: <stat> <-c> <uid=%%u gid=%%g mode=%%a type=%%F size=%%s links=%%h> <%s>\n' "$1"
             STAT_OUTPUT=$(stat -c 'uid=%u gid=%g mode=%a type=%F size=%s links=%h' "$1" 2>/dev/null)
             STAT_STATUS=$?
             ;;
     esac
+    printf 'STAT_EXIT_STATUS: %s\n' "$STAT_STATUS"
     if [ "$STAT_STATUS" -eq 0 ] && [ -n "$STAT_OUTPUT" ]; then
         printf 'STAT_METADATA: %s\n' "$STAT_OUTPUT"
     else
@@ -163,18 +170,23 @@ stat_line() {
 hash_file() {
     HASH_PATH=$1
     if command_available shasum; then
-        printf 'SHA256_COMMAND: shasum -a 256 %s\n' "$HASH_PATH"
+        printf 'HASH_COMMAND: <shasum> <-a> <256> <%s>\n' "$HASH_PATH"
         shasum -a 256 "$HASH_PATH" 2>&1
+        HASH_STATUS=$?
     elif command_available sha256sum; then
-        printf 'SHA256_COMMAND: sha256sum %s\n' "$HASH_PATH"
+        printf 'HASH_COMMAND: <sha256sum> <%s>\n' "$HASH_PATH"
         sha256sum "$HASH_PATH" 2>&1
+        HASH_STATUS=$?
     elif command_available openssl; then
-        printf 'SHA256_COMMAND: openssl dgst -sha256 %s\n' "$HASH_PATH"
+        printf 'HASH_COMMAND: <openssl> <dgst> <-sha256> <%s>\n' "$HASH_PATH"
         openssl dgst -sha256 "$HASH_PATH" 2>&1
+        HASH_STATUS=$?
     else
         printf 'MISSING_COMMAND: shasum, sha256sum, or openssl (no SHA-256 tool available)\n'
         return 127
     fi
+    printf 'HASH_EXIT_STATUS: %s\n' "$HASH_STATUS"
+    return "$HASH_STATUS"
 }
 
 report_tool() {
@@ -244,7 +256,10 @@ inspect_path() {
     printf 'OBSERVED_FILE_TYPE: %s\n' "$PATH_KIND"
 
     if command_available ls; then
+        printf 'LS_COMMAND: <ls> <-ld> <%s>\n' "$PATH_VALUE"
         ls -ld "$PATH_VALUE" 2>&1
+        LS_STATUS=$?
+        printf 'LS_EXIT_STATUS: %s\n' "$LS_STATUS"
     else
         printf 'MISSING_COMMAND: ls (path ownership, mode, and type listing)\n'
     fi
@@ -626,7 +641,14 @@ run_runtime_test() {
         printf '%s\n' 'MISSING_COMMAND: stat with a supported mode format (test socket mode could not be verified).'
         RUNTIME_RESULT=FAIL
     fi
-    if command_available ls; then ls -ld "$RUNTIME_SOCKET" 2>&1; else printf 'MISSING_COMMAND: ls (test socket owner/group listing)\n'; fi
+    if command_available ls; then
+        printf 'LS_COMMAND: <ls> <-ld> <%s>\n' "$RUNTIME_SOCKET"
+        ls -ld "$RUNTIME_SOCKET" 2>&1
+        LS_STATUS=$?
+        printf 'LS_EXIT_STATUS: %s\n' "$LS_STATUS"
+    else
+        printf 'MISSING_COMMAND: ls (test socket owner/group listing)\n'
+    fi
     stat_line "$RUNTIME_SOCKET" || :
 
     if record_run 'CLI read-only IPC check' "$RUNTIME_DIR/cli.check" \
