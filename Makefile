@@ -18,7 +18,7 @@ POLICY_SOURCES := native/src/iu_policy_store.c native/src/iu_policy_manager.c na
 HOST_ADMIN_LIB := build/admin-testing/debug/libios_unsandboxed.a
 IOS_ADMIN_LIB := target/$(IOS_TARGET)/release/libios_unsandboxed.a
 HOST_ADMIN_LDFLAGS := $(HOST_ADMIN_LIB) -lpthread -ldl -lm
-IOS_ADMIN_LDFLAGS := $(IOS_ADMIN_LIB) -framework Security -framework CoreFoundation -liconv -lresolv
+IOS_ADMIN_LDFLAGS := $(IOS_ADMIN_LIB) -liconv
 NATIVE_INCLUDES := -Inative/include
 
 .PHONY: provenance-test launch-binding-test authenticated-binding-test build-attestation-test builder-trust-test builder-transaction-test builder-mutation-test trust-provider-test trust-format-test trust-manager-test trust-recovery-test origin-policy-test help build host-build test native-test state-test ipc-test packaging-test installer-test service-test package-rootful device-harness-test smoke-test adapter-test planner-test policy-test clean check-ios-toolchain build-ios
